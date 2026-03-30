@@ -464,3 +464,156 @@ def test_fetch_results_page_raises_on_http_error():
         mock_get.return_value = mock_resp
         with pytest.raises(req_lib.HTTPError):
             fetch_results_page(1, "software engineer", config)
+
+
+# ---------------------------------------------------------------------------
+# TASK 10: Main Pipeline Tests
+# ---------------------------------------------------------------------------
+
+def _make_full_config():
+    return {
+        "sites": {"eluta": {"enabled": True, "query": "software engineer", "max_pages": 2}},
+        "categories": {
+            "backend": ["backend developer"],
+            "general_swe": [],
+        },
+        "filters": {
+            "seniority_blocklist": [" lead"],
+            "non_technical_blocklist": ["millwright", "civil engineer"],
+        },
+        "classifier": {
+            "confidence_threshold": 0.60,
+            "claude_model": "claude-haiku-4-5-20251001",
+            "max_few_shot_examples": 15,
+        },
+        "scraper": {"delay_min": 0, "delay_max": 0, "respect_robots_txt": False},
+    }
+
+
+def test_pipeline_accepts_relevant_job():
+    from scraper import run_scrape
+
+    config = _make_full_config()
+    feedback = {"decisions": [], "ambiguous_titles": []}
+
+    page1_jobs = [
+        {"title": "Backend Developer", "company": "Acme", "snippet": "Python APIs",
+         "date_posted": "1 day ago", "job_id": "aaa111", "slug": "spl/backend-aaa111?imo=1",
+         "url": "https://www.eluta.ca/spl/aaa111"},
+    ]
+
+    with patch("scraper.fetch_results_page") as mock_page, \
+         patch("scraper.fetch_full_jd") as mock_jd, \
+         patch("scraper._check_robots"):
+        # Page 1 has 1 job, page 2 is empty → stops
+        mock_page.side_effect = [page1_jobs, []]
+        mock_jd.return_value = "3-5 years Python experience with Django and AWS."
+
+        accepted, review, filtered, _, _ = run_scrape(config, feedback)
+
+    assert len(accepted) == 1
+    assert accepted[0]["title"] == "Backend Developer"
+    assert accepted[0]["category"] == "backend"
+    assert accepted[0]["yoe_required"] == "2-3"  # lower bound of "3-5 years" → _categorize_yoe(3) → "2-3"
+
+
+def test_pipeline_filters_non_technical():
+    from scraper import run_scrape
+
+    config = _make_full_config()
+    feedback = {"decisions": [], "ambiguous_titles": []}
+
+    page1_jobs = [
+        {"title": "Civil Engineer", "company": "Build Co", "snippet": "Bridges",
+         "date_posted": "1 day ago", "job_id": "bbb222", "slug": "spl/civil-bbb222?imo=1",
+         "url": "https://www.eluta.ca/spl/bbb222"},
+    ]
+
+    with patch("scraper.fetch_results_page") as mock_page, \
+         patch("scraper.fetch_full_jd") as mock_jd, \
+         patch("scraper._check_robots"):
+        mock_page.side_effect = [page1_jobs, []]
+        mock_jd.return_value = ""
+
+        accepted, review, filtered, _, _ = run_scrape(config, feedback)
+
+    assert len(accepted) == 0
+    assert len(filtered) == 1
+    assert filtered[0]["title"] == "Civil Engineer"
+
+
+def test_pipeline_deduplicates_within_run():
+    from scraper import run_scrape
+
+    config = _make_full_config()
+    feedback = {"decisions": [], "ambiguous_titles": []}
+
+    same_job = {"title": "Backend Developer", "company": "Acme", "snippet": "Python",
+                "date_posted": "1 day ago", "job_id": "aaa111", "slug": "spl/backend-aaa111?imo=1",
+                "url": "https://www.eluta.ca/spl/aaa111"}
+
+    with patch("scraper.fetch_results_page") as mock_page, \
+         patch("scraper.fetch_full_jd") as mock_jd, \
+         patch("scraper._check_robots"):
+        # Same job appears on page 1 and page 2
+        mock_page.side_effect = [[same_job], [same_job]]
+        mock_jd.return_value = "2 years Python experience."
+
+        accepted, review, filtered, _, _ = run_scrape(config, feedback)
+
+    assert len(accepted) == 1  # deduplicated
+
+
+def test_pipeline_stops_at_max_pages():
+    from scraper import run_scrape
+
+    config = _make_full_config()
+    config["sites"]["eluta"]["max_pages"] = 2
+    feedback = {"decisions": [], "ambiguous_titles": []}
+
+    infinite_page = [
+        {"title": "Backend Developer", "company": "Acme", "snippet": "Python",
+         "date_posted": "1 day ago", "job_id": f"id{i}", "slug": f"spl/backend-id{i}?imo=1",
+         "url": f"https://www.eluta.ca/spl/id{i}"}
+        for i in range(10)
+    ]
+
+    with patch("scraper.fetch_results_page") as mock_page, \
+         patch("scraper.fetch_full_jd") as mock_jd, \
+         patch("scraper._check_robots"):
+        mock_page.return_value = infinite_page  # always returns results
+        mock_jd.return_value = "2 years Python experience."
+
+        accepted, review, filtered, _, pages = run_scrape(config, feedback)
+
+    assert pages == 2  # stopped at max_pages, not from empty page
+
+
+def test_pipeline_filters_feedback_rejected_title():
+    from scraper import run_scrape
+
+    config = _make_full_config()
+    feedback = {
+        "decisions": [
+            {"title": "Backend Developer", "relevant": False, "category": None,
+             "reason": "Not actually a dev role", "source": "review"}
+        ],
+        "ambiguous_titles": []
+    }
+
+    page1 = [
+        {"title": "Backend Developer", "company": "Acme", "snippet": "Python",
+         "date_posted": "1 day ago", "job_id": "aaa111", "slug": "spl/backend-aaa111?imo=1",
+         "url": "https://www.eluta.ca/spl/aaa111"},
+    ]
+
+    with patch("scraper.fetch_results_page") as mock_page, \
+         patch("scraper.fetch_full_jd") as mock_jd, \
+         patch("scraper._check_robots"):
+        mock_page.side_effect = [page1, []]
+        mock_jd.return_value = "Some description."
+
+        accepted, review, filtered, _, _ = run_scrape(config, feedback)
+
+    assert len(accepted) == 0
+    assert any(j["title"] == "Backend Developer" for j in filtered)

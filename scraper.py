@@ -388,3 +388,120 @@ def fetch_full_jd(slug: str, config: dict) -> str:
     if not desc:
         return ""
     return desc.get_text(separator=" ", strip=True)
+
+
+# ---------------------------------------------------------------------------
+# Main Pipeline
+# ---------------------------------------------------------------------------
+
+def classify_job(job: dict, jd_text: str, feedback: dict, config: dict, is_ambiguous: bool = False) -> dict:
+    """
+    Run the Flow D classifier on a single job.
+    is_ambiguous: True when the title came from the ambiguous list — skip straight to Claude.
+    Returns job dict enriched with: category, confidence, flagged_for_review, yoe_required.
+    """
+    title = job["title"]
+
+    if not is_ambiguous:
+        # Step 1: feedback lookup
+        fb_decision = feedback_lookup(title, feedback)
+        if fb_decision:
+            if not fb_decision["relevant"]:
+                # Previously confirmed as not relevant — filter it
+                return {**job, "relevant": False, "category": None,
+                        "confidence": 1.0, "flagged_for_review": False, "yoe_required": "unknown"}
+            return {
+                **job,
+                "category": fb_decision["category"] or "general_swe",
+                "confidence": 1.0,
+                "flagged_for_review": False,
+                "yoe_required": extract_yoe(jd_text),
+            }
+
+        # Step 2: keyword match
+        kw_category = keyword_classify(title, config["categories"])
+        if kw_category:
+            return {
+                **job,
+                "category": kw_category,
+                "confidence": None,
+                "flagged_for_review": False,
+                "yoe_required": extract_yoe(jd_text),
+            }
+
+    # Step 3: Claude
+    claude_result = claude_classify(title, jd_text, feedback, config)
+    yoe = extract_yoe(jd_text)  # compute once; fall back to Claude's yoe if regex found nothing
+    return {
+        **job,
+        "category": claude_result["category"] or "general_swe",
+        "confidence": claude_result["confidence"],
+        "flagged_for_review": claude_result["flagged_for_review"],
+        "relevant": claude_result["relevant"],
+        "yoe_required": yoe if yoe != "unknown" else claude_result.get("yoe", "unknown"),
+    }
+
+
+def run_scrape(config: dict, feedback: dict) -> tuple[list, list, list, int, int]:
+    """
+    Main scrape loop. Returns (accepted, review, filtered, duplicate_count, pages_scraped).
+    - accepted: classified jobs above confidence threshold
+    - review: borderline jobs flagged for human review
+    - filtered: hard-filtered jobs (non-technical / seniority)
+    - duplicate_count: jobs skipped due to duplicate job_id in this run
+    - pages_scraped: number of result pages fetched
+    """
+    _check_robots(config)
+
+    eluta_cfg = config["sites"]["eluta"]
+    query = eluta_cfg["query"]
+    max_pages = eluta_cfg["max_pages"]
+
+    seen_ids: set[str] = set()
+    accepted: list[dict] = []
+    review: list[dict] = []
+    filtered: list[dict] = []
+    duplicate_count = 0
+
+    for page in range(1, max_pages + 1):
+        page_jobs = fetch_results_page(page, query, config)
+
+        if not page_jobs:
+            break  # No more results
+
+        page_new = 0
+        for job in page_jobs:
+            jid = job["job_id"]
+            if jid in seen_ids:
+                duplicate_count += 1
+                continue
+            seen_ids.add(jid)
+            page_new += 1
+
+            ambiguous = [t.lower() for t in feedback.get("ambiguous_titles", [])]
+            action, reason = hard_filter(job["title"], config, ambiguous)
+
+            if action == "filter":
+                filtered.append({**job, "filter_reason": reason})
+                continue
+
+            # Fetch full JD for all non-filtered jobs
+            jd_text = fetch_full_jd(job["slug"], config)
+
+            classified = classify_job(job, jd_text, feedback, config, is_ambiguous=(action == "ambiguous"))
+
+            # For Claude-classified jobs: check relevance flag
+            if "relevant" in classified and not classified["relevant"]:
+                filtered.append({**job, "filter_reason": "Claude: not relevant"})
+                continue
+
+            if classified.get("flagged_for_review"):
+                review.append(classified)
+            else:
+                accepted.append(classified)
+
+        # Stop if entire page was duplicates
+        if page_new == 0 and page > 1:
+            break
+
+    return accepted, review, filtered, duplicate_count, page
