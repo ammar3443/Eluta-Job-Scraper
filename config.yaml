@@ -1,0 +1,85 @@
+sites:
+  eluta:
+    enabled: true
+    query: "software engineer"
+    max_pages: 100
+
+categories:
+  backend:
+    - backend developer
+    - server-side engineer
+    - api engineer
+    - software engineer backend
+  frontend:
+    - frontend developer
+    - ui engineer
+    - web developer
+    - react developer
+    - angular developer
+  fullstack:
+    - full stack developer
+    - fullstack developer
+    - full-stack engineer
+  ai_ml:
+    - ai engineer
+    - ml engineer
+    - machine learning engineer
+    - nlp engineer
+    - computer vision engineer
+    - data scientist
+  firmware:
+    - firmware engineer
+    - embedded software engineer
+    - embedded systems engineer
+    - rtos engineer
+  cloud_devops:
+    - cloud engineer
+    - devops engineer
+    - site reliability engineer
+    - sre
+    - infrastructure engineer
+    - platform engineer
+  mobile:
+    - ios developer
+    - android developer
+    - mobile developer
+    - react native developer
+  data:
+    - data engineer
+    - analytics engineer
+    - etl developer
+  analyst:
+    - business analyst
+    - systems analyst
+    - technical analyst
+  general_swe: []
+
+filters:
+  seniority_blocklist:
+    - " lead"
+    - " staff"
+    - "team lead"
+    - "principal engineer"
+    - "engineering manager"
+  non_technical_blocklist:
+    - millwright
+    - electrician
+    - civil engineer
+    - plumber
+    - hvac
+    - welder
+    - machinist
+    - pipefitter
+    - ironworker
+    - carpenter
+    - sheet metal
+
+classifier:
+  confidence_threshold: 0.60
+  claude_model: claude-haiku-4-5-20251001
+  max_few_shot_examples: 15
+
+scraper:
+  delay_min: 2
+  delay_max: 5
+  respect_robots_txt: true
