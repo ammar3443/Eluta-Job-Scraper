@@ -45,3 +45,67 @@ def test_save_feedback_writes_json(tmp_path):
     save_feedback(fb, str(fb_file))
     written = json.loads(fb_file.read_text())
     assert written["decisions"][0]["title"] == "Backend Dev"
+
+
+def test_hard_filter_blocks_seniority():
+    from scraper import hard_filter
+    config = {
+        "filters": {
+            "seniority_blocklist": [" lead", "team lead", "engineering manager"],
+            "non_technical_blocklist": ["millwright"],
+        }
+    }
+    action, reason = hard_filter("Engineering Lead", config, [])
+    assert action == "filter"
+    assert "seniority" in reason.lower()
+
+
+def test_hard_filter_blocks_non_technical():
+    from scraper import hard_filter
+    config = {
+        "filters": {
+            "seniority_blocklist": [" lead"],
+            "non_technical_blocklist": ["millwright", "electrician"],
+        }
+    }
+    action, reason = hard_filter("Millwright Technician", config, [])
+    assert action == "filter"
+    assert "non-technical" in reason.lower()
+
+
+def test_hard_filter_passes_clean_title():
+    from scraper import hard_filter
+    config = {
+        "filters": {
+            "seniority_blocklist": [" lead"],
+            "non_technical_blocklist": ["millwright"],
+        }
+    }
+    action, reason = hard_filter("Backend Developer", config, [])
+    assert action == "pass"
+    assert reason is None
+
+
+def test_hard_filter_ambiguous_list_overrides_blocklist():
+    from scraper import hard_filter
+    config = {
+        "filters": {
+            "seniority_blocklist": [" lead"],
+            "non_technical_blocklist": ["civil engineer"],
+        }
+    }
+    # "controls engineer" was disputed, now in ambiguous list
+    action, reason = hard_filter("Controls Engineer", config, ["controls engineer"])
+    assert action == "ambiguous"
+
+
+def test_hard_filter_case_insensitive():
+    from scraper import hard_filter
+    config = {
+        "filters": {
+            "seniority_blocklist": [" lead"],
+            "non_technical_blocklist": ["millwright"],
+        }
+    }
+    action, _ = hard_filter("MILLWRIGHT OPERATOR", config, [])
+    assert action == "filter"

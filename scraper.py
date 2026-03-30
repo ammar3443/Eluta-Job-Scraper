@@ -70,3 +70,34 @@ def load_feedback(path: str = "feedback.json") -> dict:
 def save_feedback(feedback: dict, path: str = "feedback.json") -> None:
     with open(path, "w") as f:
         json.dump(feedback, f, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# Hard Filter
+# ---------------------------------------------------------------------------
+
+def hard_filter(title: str, config: dict, ambiguous_titles: list) -> tuple[str, str | None]:
+    """
+    Returns (action, reason).
+    action: "pass" | "filter" | "ambiguous"
+    reason: description string if filtered, None if passed/ambiguous
+    """
+    title_lower = title.lower().strip()
+
+    # Ambiguous list overrides all blocklists — goes straight to Claude
+    if title_lower in [t.lower() for t in ambiguous_titles]:
+        return ("ambiguous", None)
+
+    filters = config["filters"]
+
+    # Seniority blocklist
+    for term in filters["seniority_blocklist"]:
+        if term.lower() in title_lower:
+            return ("filter", f"seniority blocklist match: '{term}'")
+
+    # Non-technical blocklist
+    for term in filters["non_technical_blocklist"]:
+        if term.lower() in title_lower:
+            return ("filter", f"non-technical blocklist match: '{term}'")
+
+    return ("pass", None)
