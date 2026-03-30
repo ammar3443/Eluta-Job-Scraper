@@ -148,3 +148,23 @@ def extract_yoe(text: str) -> str:
         return _categorize_yoe(int(exp_colon.group(1)))
 
     return "unknown"
+
+
+# ---------------------------------------------------------------------------
+# Keyword Classifier
+# ---------------------------------------------------------------------------
+
+def keyword_classify(title: str, categories: dict) -> str | None:
+    """
+    Match job title against category keyword lists.
+    Returns category name or None if no match (→ Claude).
+    general_swe has no keywords intentionally — never keyword-matched.
+    """
+    title_lower = title.lower()
+    for category, keywords in categories.items():
+        if not keywords:
+            continue
+        for kw in keywords:
+            if kw.lower() in title_lower:
+                return category
+    return None

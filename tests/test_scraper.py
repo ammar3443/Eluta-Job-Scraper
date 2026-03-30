@@ -154,3 +154,45 @@ def test_extract_yoe_unknown():
 def test_extract_yoe_one_year():
     from scraper import extract_yoe
     assert extract_yoe("1 year of experience with React.") == "0-1"
+
+
+# ---------------------------------------------------------------------------
+# TASK 5: Keyword Classifier Tests
+# ---------------------------------------------------------------------------
+
+def _make_categories():
+    return {
+        "backend": ["backend developer", "api engineer"],
+        "frontend": ["frontend developer", "ui engineer"],
+        "ai_ml": ["ml engineer", "machine learning engineer"],
+        "firmware": ["firmware engineer", "embedded software engineer"],
+        "cloud_devops": ["cloud engineer", "devops engineer"],
+        "general_swe": [],
+    }
+
+
+def test_keyword_classify_exact_match():
+    from scraper import keyword_classify
+    assert keyword_classify("Backend Developer", _make_categories()) == "backend"
+
+
+def test_keyword_classify_case_insensitive():
+    from scraper import keyword_classify
+    assert keyword_classify("FRONTEND DEVELOPER", _make_categories()) == "frontend"
+
+
+def test_keyword_classify_partial_match():
+    from scraper import keyword_classify
+    # "Senior ML Engineer" contains "ml engineer"
+    assert keyword_classify("Senior ML Engineer", _make_categories()) == "ai_ml"
+
+
+def test_keyword_classify_no_match_returns_none():
+    from scraper import keyword_classify
+    assert keyword_classify("Technical Specialist", _make_categories()) is None
+
+
+def test_keyword_classify_general_swe_never_matches():
+    # general_swe has empty keywords — always falls through to Claude
+    from scraper import keyword_classify
+    assert keyword_classify("Software Engineer", _make_categories()) is None
