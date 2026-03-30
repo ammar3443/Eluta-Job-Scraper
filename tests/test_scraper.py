@@ -3,7 +3,7 @@ import json
 import os
 import pytest
 import yaml
-from unittest.mock import mock_open, patch
+from unittest.mock import MagicMock, mock_open, patch
 
 
 def test_load_config_returns_dict(tmp_path):
@@ -315,10 +315,7 @@ def test_parse_claude_response_malformed_returns_low_confidence():
 # TASK 8: Claude Classifier Tests
 # ---------------------------------------------------------------------------
 
-from unittest.mock import MagicMock, patch
-
-
-def test_claude_classify_returns_classification(tmp_path):
+def test_claude_classify_returns_classification():
     from scraper import claude_classify
     feedback = {"decisions": [], "ambiguous_titles": []}
     config = {
@@ -338,9 +335,11 @@ def test_claude_classify_returns_classification(tmp_path):
     assert result["relevant"] is True
     assert result["category"] == "backend"
     assert result["confidence"] == 0.93
+    assert result["yoe"] == "2-3"
+    assert result["flagged_for_review"] is False
 
 
-def test_claude_classify_flags_low_confidence(tmp_path):
+def test_claude_classify_flags_low_confidence():
     from scraper import claude_classify
     feedback = {"decisions": [], "ambiguous_titles": []}
     config = {
@@ -358,3 +357,4 @@ def test_claude_classify_flags_low_confidence(tmp_path):
         result = claude_classify("Technical Specialist", "Some job.", feedback, config)
 
     assert result["flagged_for_review"] is True
+    assert result["confidence"] == 0.45
