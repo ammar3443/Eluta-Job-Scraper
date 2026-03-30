@@ -101,3 +101,50 @@ def hard_filter(title: str, config: dict, ambiguous_titles: list) -> tuple[str, 
             return ("filter", f"non-technical blocklist match: '{term.strip()}'")
 
     return ("pass", None)
+
+
+# ---------------------------------------------------------------------------
+# YOE Extractor
+# ---------------------------------------------------------------------------
+
+def _categorize_yoe(years: int) -> str:
+    if years <= 1:
+        return "0-1"
+    elif years <= 3:
+        return "2-3"
+    elif years <= 5:
+        return "4-5"
+    else:
+        return "5+"
+
+
+def extract_yoe(text: str) -> str:
+    """Extract years-of-experience requirement from job description text."""
+    text_lower = text.lower()
+
+    # New grad / intern / entry level first
+    entry_patterns = ["new grad", "new graduate", "entry level", "entry-level",
+                      "internship", "co-op", "coop", "no experience"]
+    if any(p in text_lower for p in entry_patterns):
+        return "0-1"
+
+    # "3-5 years" or "3 to 5 years"
+    range_match = re.search(
+        r"(\d+)\s*(?:-|to)\s*(\d+)\s*\+?\s*years?", text_lower
+    )
+    if range_match:
+        return _categorize_yoe(int(range_match.group(1)))
+
+    # "5+ years experience" or "5 years of experience"
+    single_match = re.search(
+        r"(\d+)\s*\+?\s*years?\s*(?:of\s+)?(?:experience|exp)", text_lower
+    )
+    if single_match:
+        return _categorize_yoe(int(single_match.group(1)))
+
+    # "experience: 3 years" style
+    exp_colon = re.search(r"experience[:\s]+(\d+)\s*\+?\s*years?", text_lower)
+    if exp_colon:
+        return _categorize_yoe(int(exp_colon.group(1)))
+
+    return "unknown"

@@ -109,3 +109,48 @@ def test_hard_filter_case_insensitive():
     }
     action, _ = hard_filter("MILLWRIGHT OPERATOR", config, [])
     assert action == "filter"
+
+
+# ---------------------------------------------------------------------------
+# TASK 4: YOE Extractor Tests
+# ---------------------------------------------------------------------------
+
+def test_extract_yoe_range():
+    from scraper import extract_yoe
+    # Lower bound (3) passed to _categorize_yoe → "2-3"
+    assert extract_yoe("We require 3-5 years of experience in Python.") == "2-3"
+
+
+def test_extract_yoe_single():
+    from scraper import extract_yoe
+    assert extract_yoe("Minimum 2 years of experience required.") == "2-3"
+
+
+def test_extract_yoe_plus():
+    from scraper import extract_yoe
+    assert extract_yoe("7+ years experience with distributed systems.") == "5+"
+
+
+def test_extract_yoe_new_grad():
+    from scraper import extract_yoe
+    assert extract_yoe("This is a new grad position, no experience needed.") == "0-1"
+
+
+def test_extract_yoe_internship():
+    from scraper import extract_yoe
+    assert extract_yoe("Summer internship for computer science students.") == "0-1"
+
+
+def test_extract_yoe_entry_level():
+    from scraper import extract_yoe
+    assert extract_yoe("Entry-level software engineer role.") == "0-1"
+
+
+def test_extract_yoe_unknown():
+    from scraper import extract_yoe
+    assert extract_yoe("Join our team and work on exciting projects.") == "unknown"
+
+
+def test_extract_yoe_one_year():
+    from scraper import extract_yoe
+    assert extract_yoe("1 year of experience with React.") == "0-1"
