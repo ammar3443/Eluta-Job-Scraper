@@ -675,3 +675,76 @@ def test_pipeline_pages_scraped_correct_on_early_empty_page():
         _, _, _, _, pages = run_scrape(config, feedback)
 
     assert pages == 1  # only 1 page actually had results
+
+
+# ---------------------------------------------------------------------------
+# TASK 11: XLSX Exporter Tests
+# ---------------------------------------------------------------------------
+
+from openpyxl import load_workbook
+
+
+def _make_accepted_jobs():
+    return [
+        {
+            "job_id": "abc123", "title": "Backend Developer", "company": "Acme Corp",
+            "date_posted": "1 day ago", "category": "backend", "yoe_required": "2-3",
+            "url": "https://www.eluta.ca/spl/abc123", "confidence": None,
+        },
+        {
+            "job_id": "def456", "title": "ML Engineer", "company": "AI Co",
+            "date_posted": "3 days ago", "category": "ai_ml", "yoe_required": "4-5",
+            "url": "https://www.eluta.ca/spl/def456", "confidence": 0.87,
+        },
+    ]
+
+
+def test_write_accepted_xlsx_creates_file(tmp_path):
+    from scraper import write_accepted_xlsx
+    out = tmp_path / "jobs.xlsx"
+    write_accepted_xlsx(_make_accepted_jobs(), str(out))
+    assert out.exists()
+
+
+def test_write_accepted_xlsx_has_correct_headers(tmp_path):
+    from scraper import write_accepted_xlsx
+    out = tmp_path / "jobs.xlsx"
+    write_accepted_xlsx(_make_accepted_jobs(), str(out))
+    wb = load_workbook(str(out))
+    ws = wb.active
+    headers = [ws.cell(1, c).value for c in range(1, 9)]
+    assert "title" in headers
+    assert "category" in headers
+    assert "yoe_required" in headers
+    assert "url" in headers
+
+
+def test_write_accepted_xlsx_has_correct_row_count(tmp_path):
+    from scraper import write_accepted_xlsx
+    out = tmp_path / "jobs.xlsx"
+    write_accepted_xlsx(_make_accepted_jobs(), str(out))
+    wb = load_workbook(str(out))
+    ws = wb.active
+    # 1 header row + 2 data rows
+    assert ws.max_row == 3
+
+
+def test_write_review_xlsx_has_confirm_column(tmp_path):
+    from scraper import write_review_xlsx
+    out = tmp_path / "review.xlsx"
+    write_review_xlsx(_make_accepted_jobs(), str(out))
+    wb = load_workbook(str(out))
+    ws = wb.active
+    headers = [ws.cell(1, c).value for c in range(1, 12)]
+    assert "confirm" in headers
+    assert "reason" in headers
+
+
+def test_write_accepted_xlsx_url_is_hyperlink(tmp_path):
+    from scraper import write_accepted_xlsx, _ACCEPTED_COLUMNS
+    out = tmp_path / "jobs.xlsx"
+    write_accepted_xlsx(_make_accepted_jobs(), str(out))
+    wb = load_workbook(str(out))
+    ws = wb.active
+    url_col = _ACCEPTED_COLUMNS.index("url") + 1  # 1-based
+    assert ws.cell(2, url_col).hyperlink is not None

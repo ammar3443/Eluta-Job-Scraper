@@ -509,3 +509,83 @@ def run_scrape(config: dict, feedback: dict) -> tuple[list, list, list, int, int
             break
 
     return accepted, review, filtered, duplicate_count, pages_scraped
+
+
+# ---------------------------------------------------------------------------
+# XLSX Export
+# ---------------------------------------------------------------------------
+
+_ACCEPTED_COLUMNS = ["job_id", "title", "company", "date_posted", "category",
+                     "yoe_required", "url", "confidence"]
+
+_REVIEW_COLUMNS = _ACCEPTED_COLUMNS + ["confirm", "reason"]
+
+_HEADER_FILL = PatternFill("solid", fgColor="2F4F4F")
+_HEADER_FONT = Font(bold=True, color="FFFFFF")
+
+
+def _apply_xlsx_formatting(ws, columns: list[str]) -> None:
+    """Apply header formatting, auto-filter, and freeze top row."""
+    # Header row
+    for col_idx, col_name in enumerate(columns, start=1):
+        cell = ws.cell(1, col_idx)
+        cell.value = col_name
+        cell.fill = _HEADER_FILL
+        cell.font = _HEADER_FONT
+        cell.alignment = Alignment(horizontal="center")
+
+    # Auto-filter on all columns
+    ws.auto_filter.ref = f"A1:{get_column_letter(len(columns))}1"
+
+    # Freeze top row
+    ws.freeze_panes = "A2"
+
+    # Column widths
+    widths = {"title": 40, "company": 25, "url": 50, "category": 15,
+              "yoe_required": 12, "date_posted": 15, "confidence": 12,
+              "job_id": 34, "confirm": 10, "reason": 40}
+    for col_idx, col_name in enumerate(columns, start=1):
+        ws.column_dimensions[get_column_letter(col_idx)].width = widths.get(col_name, 15)
+
+
+def _write_job_row(ws, row_idx: int, job: dict, columns: list[str]) -> None:
+    """Write a single job row with category color-coding and URL hyperlink."""
+    fill_color = CATEGORY_COLORS.get(job.get("category", "general_swe"), "FFFFFF")
+    row_fill = PatternFill("solid", fgColor=fill_color)
+
+    for col_idx, col_name in enumerate(columns, start=1):
+        cell = ws.cell(row_idx, col_idx)
+        value = job.get(col_name, "")
+
+        if col_name == "url" and value:
+            cell.hyperlink = value
+            cell.value = value
+            cell.font = Font(color="0563C1", underline="single")
+        elif col_name == "confidence" and value is not None:
+            cell.value = f"{value:.0%}" if isinstance(value, float) else ""
+        else:
+            cell.value = value if value is not None else ""
+
+        if col_name != "url":
+            cell.fill = row_fill
+
+
+def write_accepted_xlsx(jobs: list[dict], filepath: str) -> None:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Jobs"
+    _apply_xlsx_formatting(ws, _ACCEPTED_COLUMNS)
+    for i, job in enumerate(jobs, start=2):
+        _write_job_row(ws, i, job, _ACCEPTED_COLUMNS)
+    wb.save(filepath)
+
+
+def write_review_xlsx(jobs: list[dict], filepath: str) -> None:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Review"
+    _apply_xlsx_formatting(ws, _REVIEW_COLUMNS)
+    for i, job in enumerate(jobs, start=2):
+        _write_job_row(ws, i, job, _REVIEW_COLUMNS)
+        # Leave confirm and reason blank for user to fill
+    wb.save(filepath)
