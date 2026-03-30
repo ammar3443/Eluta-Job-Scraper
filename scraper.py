@@ -274,3 +274,29 @@ def parse_claude_response(raw: str) -> dict:
 
     # Fallback: unparseable response → flag for review
     return {"relevant": False, "category": None, "confidence": 0.0, "yoe": "unknown"}
+
+
+# ---------------------------------------------------------------------------
+# Claude Classifier
+# ---------------------------------------------------------------------------
+
+def claude_classify(title: str, jd_text: str, feedback: dict, config: dict) -> dict:
+    """
+    Call Claude Haiku to classify a borderline job.
+    Returns dict with keys: relevant, category, confidence, yoe, flagged_for_review.
+    Requires ANTHROPIC_API_KEY environment variable.
+    """
+    client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from env
+    prompt = build_claude_prompt(title, jd_text, feedback, config)
+
+    response = client.messages.create(
+        model=config["classifier"]["claude_model"],
+        max_tokens=100,
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    raw = response.content[0].text
+    result = parse_claude_response(raw)
+    threshold = config["classifier"]["confidence_threshold"]
+    result["flagged_for_review"] = result["confidence"] < threshold
+    return result

@@ -309,3 +309,52 @@ def test_parse_claude_response_malformed_returns_low_confidence():
     result = parse_claude_response("Sorry I cannot classify this.")
     assert result["confidence"] < 0.60
     assert result["relevant"] is False
+
+
+# ---------------------------------------------------------------------------
+# TASK 8: Claude Classifier Tests
+# ---------------------------------------------------------------------------
+
+from unittest.mock import MagicMock, patch
+
+
+def test_claude_classify_returns_classification(tmp_path):
+    from scraper import claude_classify
+    feedback = {"decisions": [], "ambiguous_titles": []}
+    config = {
+        "classifier": {
+            "confidence_threshold": 0.60,
+            "claude_model": "claude-haiku-4-5-20251001",
+            "max_few_shot_examples": 15,
+        }
+    }
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text='{"relevant": true, "category": "backend", "confidence": 0.93, "yoe": "2-3"}')]
+
+    with patch("scraper.anthropic.Anthropic") as MockClient:
+        MockClient.return_value.messages.create.return_value = mock_response
+        result = claude_classify("Backend Developer", "Python, Django, REST APIs.", feedback, config)
+
+    assert result["relevant"] is True
+    assert result["category"] == "backend"
+    assert result["confidence"] == 0.93
+
+
+def test_claude_classify_flags_low_confidence(tmp_path):
+    from scraper import claude_classify
+    feedback = {"decisions": [], "ambiguous_titles": []}
+    config = {
+        "classifier": {
+            "confidence_threshold": 0.60,
+            "claude_model": "claude-haiku-4-5-20251001",
+            "max_few_shot_examples": 15,
+        }
+    }
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text='{"relevant": true, "category": "general_swe", "confidence": 0.45, "yoe": "unknown"}')]
+
+    with patch("scraper.anthropic.Anthropic") as MockClient:
+        MockClient.return_value.messages.create.return_value = mock_response
+        result = claude_classify("Technical Specialist", "Some job.", feedback, config)
+
+    assert result["flagged_for_review"] is True
