@@ -245,3 +245,67 @@ def test_feedback_lookup_fuzzy_below_threshold_returns_none():
     # "Mechanical Engineer" is not similar enough to any stored title
     result = feedback_lookup("Mechanical Engineer", _make_feedback())
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# TASK 7: Claude Prompt Builder and Response Parser Tests
+# ---------------------------------------------------------------------------
+
+def test_build_claude_prompt_includes_title_and_jd():
+    from scraper import build_claude_prompt
+    feedback = {"decisions": [], "ambiguous_titles": []}
+    config = {"classifier": {"max_few_shot_examples": 15}}
+    prompt = build_claude_prompt("Platform Engineer", "We use AWS and Terraform.", feedback, config)
+    assert "Platform Engineer" in prompt
+    assert "AWS" in prompt
+    assert "Terraform" in prompt
+
+
+def test_build_claude_prompt_includes_few_shot_examples():
+    from scraper import build_claude_prompt
+    feedback = {
+        "decisions": [
+            {"title": "Embedded C Developer", "relevant": True, "category": "firmware", "reason": "PLC work"},
+            {"title": "Civil Engineer", "relevant": False, "category": None, "reason": "not software"},
+        ],
+        "ambiguous_titles": []
+    }
+    config = {"classifier": {"max_few_shot_examples": 15}}
+    prompt = build_claude_prompt("Some Job", "Some description.", feedback, config)
+    assert "Embedded C Developer" in prompt
+    assert "Civil Engineer" in prompt
+
+
+def test_build_claude_prompt_caps_few_shot_examples():
+    from scraper import build_claude_prompt
+    decisions = [{"title": f"Job {i}", "relevant": True, "category": "backend", "reason": ""} for i in range(20)]
+    feedback = {"decisions": decisions, "ambiguous_titles": []}
+    config = {"classifier": {"max_few_shot_examples": 5}}
+    prompt = build_claude_prompt("New Job", "Description.", feedback, config)
+    # Only last 5 decisions should appear
+    assert "Job 19" in prompt
+    assert "Job 0" not in prompt
+
+
+def test_parse_claude_response_valid_json():
+    from scraper import parse_claude_response
+    raw = '{"relevant": true, "category": "backend", "confidence": 0.92, "yoe": "2-3"}'
+    result = parse_claude_response(raw)
+    assert result["relevant"] is True
+    assert result["category"] == "backend"
+    assert result["confidence"] == 0.92
+    assert result["yoe"] == "2-3"
+
+
+def test_parse_claude_response_json_in_text():
+    from scraper import parse_claude_response
+    raw = 'Here is my answer: {"relevant": false, "category": null, "confidence": 0.95, "yoe": "unknown"} done.'
+    result = parse_claude_response(raw)
+    assert result["relevant"] is False
+
+
+def test_parse_claude_response_malformed_returns_low_confidence():
+    from scraper import parse_claude_response
+    result = parse_claude_response("Sorry I cannot classify this.")
+    assert result["confidence"] < 0.60
+    assert result["relevant"] is False

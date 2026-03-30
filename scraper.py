@@ -204,3 +204,71 @@ def feedback_lookup(title: str, feedback: dict) -> dict | None:
         return best_decision
 
     return None
+
+
+# ---------------------------------------------------------------------------
+# Claude Prompt + Response Parser
+# ---------------------------------------------------------------------------
+
+_CATEGORIES_LIST = (
+    "backend, frontend, fullstack, ai_ml, firmware, "
+    "cloud_devops, mobile, data, analyst, general_swe"
+)
+
+
+def build_claude_prompt(title: str, jd_text: str, feedback: dict, config: dict) -> str:
+    max_examples = config["classifier"]["max_few_shot_examples"]
+    decisions = feedback.get("decisions", [])[-max_examples:]
+
+    examples_block = ""
+    if decisions:
+        lines = []
+        for d in decisions:
+            if d["relevant"]:
+                line = f'- "{d["title"]}" → relevant, category: {d["category"]}'
+                if d.get("reason"):
+                    line += f' [{d["reason"]}]'
+            else:
+                line = f'- "{d["title"]}" → NOT relevant'
+                if d.get("reason"):
+                    line += f' [reason: {d["reason"]}]'
+            lines.append(line)
+        examples_block = "Past decisions (use these as guidance):\n" + "\n".join(lines) + "\n\n"
+
+    return (
+        "You are classifying job postings for a software engineering job search.\n\n"
+        f"{examples_block}"
+        f"Categories: {_CATEGORIES_LIST}\n\n"
+        "Rules:\n"
+        "- When in doubt about category, use general_swe — do not miss a relevant posting\n"
+        "- Non-technical roles (civil, mechanical, industrial, trades) → relevant: false\n"
+        "- Read the full job description for technology keywords (AWS, Python, Terraform, etc.)\n"
+        "- Return ONLY JSON, no explanation\n\n"
+        f"Job title: {title}\n"
+        f"Job description: {jd_text}\n\n"
+        'Reply with exactly:\n'
+        '{"relevant": true/false, "category": "<category>", "confidence": 0.0-1.0, "yoe": "0-1|2-3|4-5|5+|unknown"}'
+    )
+
+
+def parse_claude_response(raw: str) -> dict:
+    """
+    Extract JSON from Claude's response text.
+    Returns a safe fallback dict with low confidence if parsing fails.
+    """
+    # Try to find a JSON object in the response
+    match = re.search(r"\{[^{}]+\}", raw, re.DOTALL)
+    if match:
+        try:
+            data = json.loads(match.group())
+            return {
+                "relevant": bool(data.get("relevant", False)),
+                "category": data.get("category", "general_swe"),
+                "confidence": float(data.get("confidence", 0.0)),
+                "yoe": data.get("yoe", "unknown"),
+            }
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    # Fallback: unparseable response → flag for review
+    return {"relevant": False, "category": None, "confidence": 0.0, "yoe": "unknown"}
