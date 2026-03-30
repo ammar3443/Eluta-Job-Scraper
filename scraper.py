@@ -112,7 +112,7 @@ def _categorize_yoe(years: int) -> str:
         return "0-1"
     elif years <= 3:
         return "2-3"
-    elif years <= 5:
+    elif years < 5:
         return "4-5"
     else:
         return "5+"
@@ -268,7 +268,9 @@ def parse_claude_response(raw: str) -> dict:
                 "yoe": data.get("yoe", "unknown"),
             }
         except (json.JSONDecodeError, ValueError):
-            pass
+            print(f"Warning: Claude response matched JSON pattern but failed to parse: {match.group()[:100]}")
+    else:
+        print(f"Warning: Could not find JSON in Claude response: {raw[:100]}")
 
     # Fallback: unparseable response → flag for review
     return {"relevant": False, "category": None, "confidence": 0.0, "yoe": "unknown"}
