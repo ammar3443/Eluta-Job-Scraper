@@ -85,7 +85,7 @@ def hard_filter(title: str, config: dict, ambiguous_titles: list) -> tuple[str, 
     title_lower = title.lower().strip()
 
     # Ambiguous list overrides all blocklists — goes straight to Claude
-    if title_lower in {t.lower() for t in ambiguous_titles}:
+    if title_lower in ambiguous_titles:
         return ("ambiguous", None)
 
     filters = config["filters"]
@@ -412,6 +412,7 @@ def classify_job(job: dict, jd_text: str, feedback: dict, config: dict, is_ambig
                         "confidence": 1.0, "flagged_for_review": False, "yoe_required": "unknown"}
             return {
                 **job,
+                "relevant": True,
                 "category": fb_decision["category"] or "general_swe",
                 "confidence": 1.0,
                 "flagged_for_review": False,
@@ -423,8 +424,9 @@ def classify_job(job: dict, jd_text: str, feedback: dict, config: dict, is_ambig
         if kw_category:
             return {
                 **job,
+                "relevant": True,
                 "category": kw_category,
-                "confidence": None,
+                "confidence": 1.0,
                 "flagged_for_review": False,
                 "yoe_required": extract_yoe(jd_text),
             }
@@ -462,6 +464,8 @@ def run_scrape(config: dict, feedback: dict) -> tuple[list, list, list, int, int
     review: list[dict] = []
     filtered: list[dict] = []
     duplicate_count = 0
+    pages_scraped = 0
+    ambiguous_titles = {t.lower() for t in feedback.get("ambiguous_titles", [])}
 
     for page in range(1, max_pages + 1):
         page_jobs = fetch_results_page(page, query, config)
@@ -469,6 +473,7 @@ def run_scrape(config: dict, feedback: dict) -> tuple[list, list, list, int, int
         if not page_jobs:
             break  # No more results
 
+        pages_scraped += 1
         page_new = 0
         for job in page_jobs:
             jid = job["job_id"]
@@ -478,8 +483,7 @@ def run_scrape(config: dict, feedback: dict) -> tuple[list, list, list, int, int
             seen_ids.add(jid)
             page_new += 1
 
-            ambiguous = [t.lower() for t in feedback.get("ambiguous_titles", [])]
-            action, reason = hard_filter(job["title"], config, ambiguous)
+            action, reason = hard_filter(job["title"], config, ambiguous_titles)
 
             if action == "filter":
                 filtered.append({**job, "filter_reason": reason})
@@ -504,4 +508,4 @@ def run_scrape(config: dict, feedback: dict) -> tuple[list, list, list, int, int
         if page_new == 0 and page > 1:
             break
 
-    return accepted, review, filtered, duplicate_count, page
+    return accepted, review, filtered, duplicate_count, pages_scraped

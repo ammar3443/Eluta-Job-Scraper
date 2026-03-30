@@ -617,3 +617,61 @@ def test_pipeline_filters_feedback_rejected_title():
 
     assert len(accepted) == 0
     assert any(j["title"] == "Backend Developer" for j in filtered)
+
+
+def test_pipeline_routes_low_confidence_to_review():
+    from scraper import run_scrape
+
+    config = _make_full_config()
+    feedback = {"decisions": [], "ambiguous_titles": []}
+
+    # Use a title that won't keyword-match → falls through to Claude
+    page1_jobs = [
+        {"title": "Technical Specialist", "company": "Corp", "snippet": "Some role",
+         "date_posted": "1 day ago", "job_id": "ccc333", "slug": "spl/tech-ccc333?imo=1",
+         "url": "https://www.eluta.ca/spl/ccc333"},
+    ]
+
+    mock_claude_result = {
+        "relevant": True, "category": "general_swe", "confidence": 0.45,
+        "yoe": "unknown", "flagged_for_review": True,
+    }
+
+    with patch("scraper.fetch_results_page") as mock_page, \
+         patch("scraper.fetch_full_jd") as mock_jd, \
+         patch("scraper.claude_classify") as mock_claude, \
+         patch("scraper._check_robots"):
+        mock_page.side_effect = [page1_jobs, []]
+        mock_jd.return_value = "Some technical description."
+        mock_claude.return_value = mock_claude_result
+
+        accepted, review, filtered, _, _ = run_scrape(config, feedback)
+
+    assert len(accepted) == 0
+    assert len(review) == 1
+    assert review[0]["title"] == "Technical Specialist"
+
+
+def test_pipeline_pages_scraped_correct_on_early_empty_page():
+    from scraper import run_scrape
+
+    config = _make_full_config()
+    config["sites"]["eluta"]["max_pages"] = 5
+    feedback = {"decisions": [], "ambiguous_titles": []}
+
+    page1_jobs = [
+        {"title": "Backend Developer", "company": "Acme", "snippet": "Python",
+         "date_posted": "1 day ago", "job_id": "aaa111", "slug": "spl/backend-aaa111?imo=1",
+         "url": "https://www.eluta.ca/spl/aaa111"},
+    ]
+
+    with patch("scraper.fetch_results_page") as mock_page, \
+         patch("scraper.fetch_full_jd") as mock_jd, \
+         patch("scraper._check_robots"):
+        # Page 1 has jobs, page 2 is empty → stops after 1 page
+        mock_page.side_effect = [page1_jobs, []]
+        mock_jd.return_value = "2 years Python experience."
+
+        _, _, _, _, pages = run_scrape(config, feedback)
+
+    assert pages == 1  # only 1 page actually had results
