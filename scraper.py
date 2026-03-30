@@ -329,13 +329,9 @@ def _polite_delay(config: dict) -> None:
 
 
 def _extract_job_id(slug: str) -> str:
-    """Extract the hash ID from a slug like 'spl/backend-dev-abc123def456?imo=1'."""
-    # Hash is the last alphanumeric segment (after last hyphen, before query string or end)
-    # Remove query string first
-    clean_slug = slug.split('?')[0]
-    # Get the last segment after the last hyphen
-    parts = clean_slug.split('-')
-    return parts[-1] if parts else slug
+    """Extract the hash ID from a slug like 'spl/backend-dev-<32hexchars>?imo=1'."""
+    match = re.search(r"([a-f0-9]{32})", slug)
+    return match.group(1) if match else slug
 
 
 def fetch_results_page(page: int, query: str, config: dict) -> list[dict]:

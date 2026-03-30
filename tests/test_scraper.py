@@ -366,7 +366,7 @@ def test_claude_classify_flags_low_confidence():
 
 SAMPLE_RESULTS_HTML = """
 <html><body>
-<div class="organic-job odd" data-url="spl/backend-developer-abc123def456?imo=1">
+<div class="organic-job odd" data-url="spl/backend-developer-d46b145bbcc78f3ebfdc6d584e74f6e7?imo=1">
   <h2 class="title">
     <a class="lk-job-title" href="#!">Backend Developer</a>
   </h2>
@@ -374,7 +374,7 @@ SAMPLE_RESULTS_HTML = """
   <span class="description">We build APIs with Python and Django.</span>
   <a class="lk lastseen" href="#!">2 days ago</a>
 </div>
-<div class="organic-job even" data-url="spl/civil-engineer-xyz789?imo=2">
+<div class="organic-job even" data-url="spl/civil-engineer-aaaabbbbccccdddd1111222233334444?imo=2">
   <h2 class="title">
     <a class="lk-job-title" href="#!">Civil Engineer</a>
   </h2>
@@ -411,8 +411,8 @@ def test_fetch_results_page_returns_jobs():
     assert len(jobs) == 2
     assert jobs[0]["title"] == "Backend Developer"
     assert jobs[0]["company"] == "Acme Corp"
-    assert jobs[0]["job_id"] == "abc123def456"
-    assert jobs[0]["slug"] == "spl/backend-developer-abc123def456?imo=1"
+    assert jobs[0]["job_id"] == "d46b145bbcc78f3ebfdc6d584e74f6e7"
+    assert jobs[0]["slug"] == "spl/backend-developer-d46b145bbcc78f3ebfdc6d584e74f6e7?imo=1"
 
 
 def test_fetch_results_page_empty_returns_empty_list():
