@@ -331,7 +331,7 @@ def _polite_delay(config: dict) -> None:
 def _extract_job_id(slug: str) -> str:
     """Extract the hash ID from a slug like 'spl/backend-dev-<32hexchars>?imo=1'."""
     match = re.search(r"([a-f0-9]{32})", slug)
-    return match.group(1) if match else slug
+    return match.group(1) if match else slug.split("?")[0]
 
 
 def fetch_results_page(page: int, query: str, config: dict) -> list[dict]:

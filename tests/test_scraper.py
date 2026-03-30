@@ -413,6 +413,7 @@ def test_fetch_results_page_returns_jobs():
     assert jobs[0]["company"] == "Acme Corp"
     assert jobs[0]["job_id"] == "d46b145bbcc78f3ebfdc6d584e74f6e7"
     assert jobs[0]["slug"] == "spl/backend-developer-d46b145bbcc78f3ebfdc6d584e74f6e7?imo=1"
+    assert jobs[0]["url"] == "https://www.eluta.ca/spl/backend-developer-d46b145bbcc78f3ebfdc6d584e74f6e7"
 
 
 def test_fetch_results_page_empty_returns_empty_list():
@@ -451,3 +452,15 @@ def test_fetch_full_jd_returns_empty_on_parse_failure():
         mock_get.return_value = mock_resp
         text = fetch_full_jd("spl/some-job?imo=1", config)
     assert text == ""
+
+
+def test_fetch_results_page_raises_on_http_error():
+    import requests as req_lib
+    from scraper import fetch_results_page
+    config = {"scraper": {"delay_min": 0, "delay_max": 0, "respect_robots_txt": False}}
+    with patch("scraper.requests.get") as mock_get:
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status.side_effect = req_lib.HTTPError("403 Forbidden")
+        mock_get.return_value = mock_resp
+        with pytest.raises(req_lib.HTTPError):
+            fetch_results_page(1, "software engineer", config)
