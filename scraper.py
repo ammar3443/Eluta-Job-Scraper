@@ -51,8 +51,13 @@ HEADERS = {
 # ---------------------------------------------------------------------------
 
 def load_config(path: str = "config.yaml") -> dict:
-    with open(path, "r") as f:
-        return yaml.safe_load(f)
+    try:
+        with open(path, "r") as f:
+            return yaml.safe_load(f)
+    except FileNotFoundError:
+        sys.exit(f"Error: config file not found: {path}")
+    except yaml.YAMLError as exc:
+        sys.exit(f"Error: invalid YAML in {path}: {exc}")
 
 
 def load_feedback(path: str = "feedback.json") -> dict:
