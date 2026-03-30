@@ -85,7 +85,7 @@ def hard_filter(title: str, config: dict, ambiguous_titles: list) -> tuple[str, 
     title_lower = title.lower().strip()
 
     # Ambiguous list overrides all blocklists — goes straight to Claude
-    if title_lower in [t.lower() for t in ambiguous_titles]:
+    if title_lower in {t.lower() for t in ambiguous_titles}:
         return ("ambiguous", None)
 
     filters = config["filters"]
@@ -93,11 +93,11 @@ def hard_filter(title: str, config: dict, ambiguous_titles: list) -> tuple[str, 
     # Seniority blocklist
     for term in filters["seniority_blocklist"]:
         if term.lower() in title_lower:
-            return ("filter", f"seniority blocklist match: '{term}'")
+            return ("filter", f"seniority blocklist match: '{term.strip()}'")
 
     # Non-technical blocklist
     for term in filters["non_technical_blocklist"]:
         if term.lower() in title_lower:
-            return ("filter", f"non-technical blocklist match: '{term}'")
+            return ("filter", f"non-technical blocklist match: '{term.strip()}'")
 
     return ("pass", None)
