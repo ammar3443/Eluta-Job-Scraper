@@ -168,3 +168,39 @@ def keyword_classify(title: str, categories: dict) -> str | None:
             if kw.lower() in title_lower:
                 return category
     return None
+
+
+# ---------------------------------------------------------------------------
+# Feedback Lookup
+# ---------------------------------------------------------------------------
+
+_FUZZY_THRESHOLD = 0.85
+
+
+def feedback_lookup(title: str, feedback: dict) -> dict | None:
+    """
+    Check feedback decisions for a matching title.
+    Returns the decision dict {title, relevant, category, reason} or None.
+    Tries exact match first, then fuzzy match with ratio >= 0.85.
+    """
+    title_lower = title.lower().strip()
+    decisions = feedback.get("decisions", [])
+
+    # Exact match
+    for d in decisions:
+        if d["title"].lower().strip() == title_lower:
+            return d
+
+    # Fuzzy match
+    best_ratio = 0.0
+    best_decision = None
+    for d in decisions:
+        ratio = SequenceMatcher(None, title_lower, d["title"].lower().strip()).ratio()
+        if ratio > best_ratio:
+            best_ratio = ratio
+            best_decision = d
+
+    if best_ratio >= _FUZZY_THRESHOLD:
+        return best_decision
+
+    return None

@@ -196,3 +196,52 @@ def test_keyword_classify_general_swe_never_matches():
     # general_swe has empty keywords — always falls through to Claude
     from scraper import keyword_classify
     assert keyword_classify("Software Engineer", _make_categories()) is None
+
+
+# ---------------------------------------------------------------------------
+# TASK 6: Feedback Lookup Tests
+# ---------------------------------------------------------------------------
+
+def _make_feedback():
+    return {
+        "decisions": [
+            {"title": "Platform Engineer", "relevant": True, "category": "cloud_devops", "reason": "confirmed"},
+            {"title": "Process Control Engineer", "relevant": False, "category": None, "reason": "industrial"},
+        ],
+        "ambiguous_titles": ["controls engineer"]
+    }
+
+
+def test_feedback_lookup_exact_match():
+    from scraper import feedback_lookup
+    result = feedback_lookup("Platform Engineer", _make_feedback())
+    assert result["relevant"] is True
+    assert result["category"] == "cloud_devops"
+
+
+def test_feedback_lookup_case_insensitive():
+    from scraper import feedback_lookup
+    result = feedback_lookup("platform engineer", _make_feedback())
+    assert result is not None
+    assert result["relevant"] is True
+
+
+def test_feedback_lookup_fuzzy_match():
+    from scraper import feedback_lookup
+    # "Platform Engineer II" is close enough to "Platform Engineer"
+    result = feedback_lookup("Platform Engineer II", _make_feedback())
+    assert result is not None
+    assert result["category"] == "cloud_devops"
+
+
+def test_feedback_lookup_no_match_returns_none():
+    from scraper import feedback_lookup
+    result = feedback_lookup("iOS Developer", _make_feedback())
+    assert result is None
+
+
+def test_feedback_lookup_fuzzy_below_threshold_returns_none():
+    from scraper import feedback_lookup
+    # "Mechanical Engineer" is not similar enough to any stored title
+    result = feedback_lookup("Mechanical Engineer", _make_feedback())
+    assert result is None
