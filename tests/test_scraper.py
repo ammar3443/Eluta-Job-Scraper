@@ -358,3 +358,96 @@ def test_claude_classify_flags_low_confidence():
 
     assert result["flagged_for_review"] is True
     assert result["confidence"] == 0.45
+
+
+# ---------------------------------------------------------------------------
+# TASK 9: Scraper Tests
+# ---------------------------------------------------------------------------
+
+SAMPLE_RESULTS_HTML = """
+<html><body>
+<div class="organic-job odd" data-url="spl/backend-developer-abc123def456?imo=1">
+  <h2 class="title">
+    <a class="lk-job-title" href="#!">Backend Developer</a>
+  </h2>
+  <a class="employer lk-employer" href="#!">Acme Corp</a>
+  <span class="description">We build APIs with Python and Django.</span>
+  <a class="lk lastseen" href="#!">2 days ago</a>
+</div>
+<div class="organic-job even" data-url="spl/civil-engineer-xyz789?imo=2">
+  <h2 class="title">
+    <a class="lk-job-title" href="#!">Civil Engineer</a>
+  </h2>
+  <a class="employer lk-employer" href="#!">Build Co</a>
+  <span class="description">Bridge construction and design.</span>
+  <a class="lk lastseen" href="#!">1 day ago</a>
+</div>
+</body></html>
+"""
+
+SAMPLE_SPL_HTML = """
+<html><body>
+<main class="container-fluid">
+<div class="col-xl-7 col-sm-7 col-12 description">
+<div class="short-text">
+<p>We are looking for a Backend Developer with 3-5 years of Python experience.</p>
+<p>You will work with Django, PostgreSQL, and AWS.</p>
+</div>
+</div>
+</main>
+</body></html>
+"""
+
+
+def test_fetch_results_page_returns_jobs():
+    from scraper import fetch_results_page
+    config = {"scraper": {"delay_min": 0, "delay_max": 0, "respect_robots_txt": False}}
+    with patch("scraper.requests.get") as mock_get:
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.text = SAMPLE_RESULTS_HTML
+        mock_get.return_value = mock_resp
+        jobs = fetch_results_page(1, "software engineer", config)
+    assert len(jobs) == 2
+    assert jobs[0]["title"] == "Backend Developer"
+    assert jobs[0]["company"] == "Acme Corp"
+    assert jobs[0]["job_id"] == "abc123def456"
+    assert jobs[0]["slug"] == "spl/backend-developer-abc123def456?imo=1"
+
+
+def test_fetch_results_page_empty_returns_empty_list():
+    from scraper import fetch_results_page
+    config = {"scraper": {"delay_min": 0, "delay_max": 0, "respect_robots_txt": False}}
+    with patch("scraper.requests.get") as mock_get:
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.text = "<html><body></body></html>"
+        mock_get.return_value = mock_resp
+        jobs = fetch_results_page(1, "software engineer", config)
+    assert jobs == []
+
+
+def test_fetch_full_jd_returns_text():
+    from scraper import fetch_full_jd
+    config = {"scraper": {"delay_min": 0, "delay_max": 0}}
+    with patch("scraper.requests.get") as mock_get:
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.text = SAMPLE_SPL_HTML
+        mock_get.return_value = mock_resp
+        text = fetch_full_jd("spl/backend-developer-abc123def456?imo=1", config)
+    assert "Python" in text
+    assert "Django" in text
+    assert "3-5 years" in text
+
+
+def test_fetch_full_jd_returns_empty_on_parse_failure():
+    from scraper import fetch_full_jd
+    config = {"scraper": {"delay_min": 0, "delay_max": 0}}
+    with patch("scraper.requests.get") as mock_get:
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.text = "<html><body><p>No description here.</p></body></html>"
+        mock_get.return_value = mock_resp
+        text = fetch_full_jd("spl/some-job?imo=1", config)
+    assert text == ""

@@ -300,3 +300,95 @@ def claude_classify(title: str, jd_text: str, feedback: dict, config: dict) -> d
     threshold = config["classifier"]["confidence_threshold"]
     result["flagged_for_review"] = result["confidence"] < threshold
     return result
+
+
+# ---------------------------------------------------------------------------
+# Scraper
+# ---------------------------------------------------------------------------
+
+def _check_robots(config: dict) -> bool:
+    """Returns True if scraping is allowed. Exits if robots.txt disallows and respect=True."""
+    if not config["scraper"].get("respect_robots_txt", True):
+        return True
+    rp = RobotFileParser()
+    rp.set_url(f"{ELUTA_BASE}/robots.txt")
+    rp.read()
+    allowed = rp.can_fetch(HEADERS["User-Agent"], ELUTA_SEARCH)
+    if not allowed:
+        print("robots.txt disallows scraping eluta.ca. Exiting.")
+        sys.exit(1)
+    return True
+
+
+def _polite_delay(config: dict) -> None:
+    delay = random.uniform(
+        config["scraper"]["delay_min"],
+        config["scraper"]["delay_max"],
+    )
+    time.sleep(delay)
+
+
+def _extract_job_id(slug: str) -> str:
+    """Extract the hash ID from a slug like 'spl/backend-dev-abc123def456?imo=1'."""
+    # Hash is the last alphanumeric segment (after last hyphen, before query string or end)
+    # Remove query string first
+    clean_slug = slug.split('?')[0]
+    # Get the last segment after the last hyphen
+    parts = clean_slug.split('-')
+    return parts[-1] if parts else slug
+
+
+def fetch_results_page(page: int, query: str, config: dict) -> list[dict]:
+    """
+    Fetch one search results page from Eluta.
+    Returns list of job dicts: {title, company, snippet, date_posted, job_id, slug, url}
+    """
+    params = {"q": query, "page": page}
+    _polite_delay(config)
+    resp = requests.get(ELUTA_SEARCH, params=params, headers=HEADERS, timeout=15)
+    resp.raise_for_status()  # surface 403/429/5xx immediately instead of silently parsing error HTML
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    jobs = []
+    for card in soup.find_all(class_="organic-job"):
+        title_tag = card.find("a", class_="lk-job-title")
+        company_tag = card.find("a", class_="lk-employer")
+        desc_tag = card.find("span", class_="description")
+        date_tag = card.find("a", class_="lastseen")
+        slug = card.get("data-url", "")
+
+        if not title_tag or not slug:
+            continue
+
+        job_id = _extract_job_id(slug)
+        jobs.append({
+            "title": title_tag.get_text(strip=True),
+            "company": company_tag.get_text(strip=True) if company_tag else "",
+            "snippet": desc_tag.get_text(strip=True) if desc_tag else "",
+            "date_posted": date_tag.get_text(strip=True) if date_tag else "",
+            "job_id": job_id,
+            "slug": slug,
+            "url": f"{ELUTA_BASE}/{slug.split('?')[0]}",  # clean URL without ?imo= param
+        })
+    return jobs
+
+
+def fetch_full_jd(slug: str, config: dict) -> str:
+    """
+    Fetch the full job description from the /spl/ page.
+    Returns plain text of the description, or empty string on failure.
+    """
+    # slug may be "spl/job-title-hash?imo=N" — build full URL
+    url = f"{ELUTA_BASE}/{slug}" if not slug.startswith("http") else slug
+    _polite_delay(config)
+    resp = requests.get(url, headers=HEADERS, timeout=15)
+    resp.raise_for_status()
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    desc = soup.find(class_="short-text")
+    if not desc:
+        # Fallback: try description div
+        desc = soup.find("div", class_="description")
+    if not desc:
+        return ""
+    return desc.get_text(separator=" ", strip=True)
