@@ -59,7 +59,7 @@ filters:
     - " lead"
     - " staff"
     - "team lead"
-    - "principal engineer"
+    - " principal"
     - "engineering manager"
     - "director"
   non_technical_blocklist:

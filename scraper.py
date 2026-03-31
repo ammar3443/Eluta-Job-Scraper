@@ -121,9 +121,11 @@ def hard_filter(title: str, config: dict, ambiguous_titles: set) -> tuple[str, s
 
     filters = config["filters"]
 
-    # Seniority blocklist
+    # Seniority blocklist — prepend a space so " lead" matches both
+    # "Lead Engineer" (start of title) and "Team Lead" (mid-title)
+    padded_title = " " + title_lower
     for term in filters["seniority_blocklist"]:
-        if term.lower() in title_lower:
+        if term.lower() in padded_title:
             return ("filter", f"seniority blocklist match: '{term.strip()}'")
 
     # Non-technical blocklist
@@ -517,7 +519,7 @@ def run_scrape(config: dict, feedback: dict, seen_ids: set[str] | None = None) -
             page_jobs = fetch_results_page(page, query, config)
         except requests.RequestException as exc:
             network_error = str(exc)
-            print(f"  Network error on page {page}: {exc}")
+            print(f"\n  Network error on page {page}: {exc}")
             print("  Saving results collected so far.")
             break
 
@@ -530,11 +532,11 @@ def run_scrape(config: dict, feedback: dict, seen_ids: set[str] | None = None) -
             page_jobs = [j for j in page_jobs
                          if _parse_days_ago(j.get("date_posted", "")) <= cutoff_days]
             if not page_jobs:
-                print(f"  Reached {cutoff_days}-day cutoff at page {page}, stopping.")
+                print(f"\n  Reached {cutoff_days}-day cutoff at page {page}, stopping.")
                 break
 
         pages_scraped += 1
-        print(f"Scraped page {pages_scraped} ({len(page_jobs)} jobs)")
+        print(f"\r  Page {pages_scraped}...", end="", flush=True)
 
         for job in page_jobs:
             jid = job["job_id"]
@@ -553,7 +555,7 @@ def run_scrape(config: dict, feedback: dict, seen_ids: set[str] | None = None) -
             try:
                 jd_text = fetch_full_jd(job["slug"], config)
             except requests.RequestException as exc:
-                print(f"  Network error fetching JD for '{job['title']}': {exc} — skipping job.")
+                print(f"\n  Network error fetching JD for '{job['title']}': {exc} — skipping job.")
                 continue
 
             classified = classify_job(job, jd_text, feedback, config, is_ambiguous=(action == "ambiguous"))
@@ -567,6 +569,7 @@ def run_scrape(config: dict, feedback: dict, seen_ids: set[str] | None = None) -
             else:
                 accepted.append(classified)
 
+    print()  # newline after the inline page counter
     return accepted, review, filtered, duplicate_count, pages_scraped, network_error
 
 
@@ -750,10 +753,12 @@ def ingest_feedback(filepath: str, feedback: dict) -> dict:
 
 def print_summary(accepted: list, review: list, filtered: list,
                   duplicate_count: int, pages_scraped: int,
-                  out_path: str) -> None:
+                  out_path: str, elapsed: float) -> None:
     total = len(accepted) + len(review) + len(filtered) + duplicate_count
+    minutes, seconds = divmod(int(elapsed), 60)
+    elapsed_str = f"{minutes}m {seconds}s" if minutes else f"{seconds}s"
     print()
-    print(f"Scraped {total} jobs across {pages_scraped} pages")
+    print(f"Scraped {total} jobs across {pages_scraped} pages in {elapsed_str}")
     print(f"  Accepted:        {len(accepted)}")
     print(f"  Hard filtered:   {len(filtered)}  → check output/filtered_{date.today()}.json")
     print(f"  Flagged review:  {len(review)}  → check output/review_{date.today()}.xlsx")
@@ -797,6 +802,7 @@ def main() -> None:
     print(f"Starting Eluta scrape: '{config['sites']['eluta']['query']}'")
     print(f"Max pages: {config['sites']['eluta']['max_pages']}")
     print()
+    start_time = time.time()
 
     seen_ids = load_seen_ids()
     try:
@@ -819,7 +825,7 @@ def main() -> None:
         print(f"\nWarning: run ended early due to network error: {network_error}")
         print("Partial results saved.")
 
-    print_summary(accepted, review, filtered, dup_count, pages_scraped, accepted_path)
+    print_summary(accepted, review, filtered, dup_count, pages_scraped, accepted_path, time.time() - start_time)
 
 
 if __name__ == "__main__":
