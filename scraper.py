@@ -682,3 +682,76 @@ def ingest_feedback(filepath: str, feedback: dict) -> dict:
     else:
         print(f"Unknown file type: {filepath}. Expected .xlsx or .json")
         return feedback
+
+
+# ---------------------------------------------------------------------------
+# Terminal Summary
+# ---------------------------------------------------------------------------
+
+def print_summary(accepted: list, review: list, filtered: list,
+                  duplicate_count: int, pages_scraped: int,
+                  out_path: str) -> None:
+    total = len(accepted) + len(review) + len(filtered) + duplicate_count
+    print()
+    print(f"Scraped {total} jobs across {pages_scraped} pages")
+    print(f"  Accepted:        {len(accepted)}")
+    print(f"  Hard filtered:   {len(filtered)}  → check output/filtered_{date.today()}.json")
+    print(f"  Flagged review:  {len(review)}  → check output/review_{date.today()}.xlsx")
+    print(f"  Duplicate skip:  {duplicate_count}")
+    print()
+    print(f"Saved → {out_path}")
+    print()
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Eluta.ca Job Scraper")
+    parser.add_argument(
+        "--ingest-feedback", metavar="FILE",
+        help="Ingest a completed review.xlsx or disputed filtered.json into feedback.json"
+    )
+    parser.add_argument("--config", default="config.yaml", help="Path to config file")
+    parser.add_argument("--feedback", default="feedback.json", help="Path to feedback file")
+    args = parser.parse_args()
+
+    config = load_config(args.config)
+    feedback = load_feedback(args.feedback)
+
+    # Feedback ingestion mode
+    if args.ingest_feedback:
+        print(f"Ingesting feedback from {args.ingest_feedback}...")
+        before_count = len(feedback.get("decisions", []))  # capture before in-place mutation
+        updated = ingest_feedback(args.ingest_feedback, feedback)
+        save_feedback(updated, args.feedback)
+        new_decisions = len(updated["decisions"]) - before_count
+        print(f"Done. {new_decisions} new decision(s) added to {args.feedback}.")
+        return
+
+    # Scrape mode
+    os.makedirs("output", exist_ok=True)
+    today = date.today()
+
+    print(f"Starting Eluta scrape: '{config['sites']['eluta']['query']}'")
+    print(f"Max pages: {config['sites']['eluta']['max_pages']}")
+    print()
+
+    accepted, review, filtered, dup_count, pages_scraped = run_scrape(config, feedback)
+
+    accepted_path = f"output/eluta_{today}.xlsx"
+    review_path = f"output/review_{today}.xlsx"
+    filtered_path = f"output/filtered_{today}.json"
+
+    write_accepted_xlsx(accepted, accepted_path)
+    if review:
+        write_review_xlsx(review, review_path)
+    if filtered:
+        write_filtered_json(filtered, filtered_path)
+
+    print_summary(accepted, review, filtered, dup_count, pages_scraped, accepted_path)
+
+
+if __name__ == "__main__":
+    main()
