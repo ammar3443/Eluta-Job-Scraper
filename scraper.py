@@ -16,6 +16,7 @@ from urllib.parse import urlencode
 import yaml
 import requests
 from bs4 import BeautifulSoup
+from playwright.sync_api import sync_playwright, Error as PlaywrightError
 import anthropic
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import PatternFill, Font, Alignment
@@ -516,63 +517,67 @@ def run_scrape(config: dict, feedback: dict, seen_ids: set[str] | None = None) -
     ambiguous_titles = {t.lower() for t in feedback.get("ambiguous_titles", [])}
 
     network_error: str | None = None
-    session = requests.Session()
 
-    for page in range(1, max_pages + 1):
-        try:
-            page_jobs = fetch_results_page(page, query, config, session)
-        except requests.RequestException as exc:
-            network_error = str(exc)
-            print(f"\n  Network error on page {page}: {exc}")
-            print("  Saving results collected so far.")
-            break
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(user_agent=HEADERS["User-Agent"])
+        pw_page = context.new_page()
 
-        if not page_jobs:
-            print(f"\n  No more results at page {page}, stopping.")
-            break
-
-        # Date cutoff: if every job on this page is older than cutoff_days, stop.
-        # Filter to only jobs within the cutoff before processing.
-        if cutoff_days:
-            page_jobs = [j for j in page_jobs
-                         if _parse_days_ago(j.get("date_posted", "")) <= cutoff_days]
-            if not page_jobs:
-                print(f"\n  Reached {cutoff_days}-day cutoff at page {page}, stopping.")
+        for page in range(1, max_pages + 1):
+            try:
+                page_jobs = fetch_results_page(page, query, config, pw_page)
+            except PlaywrightError as exc:
+                network_error = str(exc)
+                print(f"\n  Network error on page {page}: {exc}")
+                print("  Saving results collected so far.")
                 break
 
-        pages_scraped += 1
-        print(f"\r  Page {pages_scraped}...", end="", flush=True)
+            if not page_jobs:
+                print(f"\n  No more results at page {page}, stopping.")
+                break
 
-        for job in page_jobs:
-            jid = job["job_id"]
-            if jid in seen_ids:
-                duplicate_count += 1
-                continue
-            seen_ids.add(jid)
+            # Date cutoff: if every job on this page is older than cutoff_days, stop.
+            # Filter to only jobs within the cutoff before processing.
+            if cutoff_days:
+                page_jobs = [j for j in page_jobs
+                             if _parse_days_ago(j.get("date_posted", "")) <= cutoff_days]
+                if not page_jobs:
+                    print(f"\n  Reached {cutoff_days}-day cutoff at page {page}, stopping.")
+                    break
 
-            action, reason = hard_filter(job["title"], config, ambiguous_titles)
+            pages_scraped += 1
+            print(f"\r  Page {pages_scraped}...", end="", flush=True)
 
-            if action == "filter":
-                filtered.append({**job, "filter_reason": reason})
-                continue
+            for job in page_jobs:
+                jid = job["job_id"]
+                if jid in seen_ids:
+                    duplicate_count += 1
+                    continue
+                seen_ids.add(jid)
 
-            # Fetch full JD for all non-filtered jobs
-            try:
-                jd_text = fetch_full_jd(job["slug"], config, session)
-            except requests.RequestException as exc:
-                print(f"\n  Network error fetching JD for '{job['title']}': {exc} — skipping job.")
-                continue
+                action, reason = hard_filter(job["title"], config, ambiguous_titles)
 
-            classified = classify_job(job, jd_text, feedback, config, is_ambiguous=(action == "ambiguous"))
+                if action == "filter":
+                    filtered.append({**job, "filter_reason": reason})
+                    continue
 
-            if not classified["relevant"]:
-                filtered.append({**job, "filter_reason": "Claude: not relevant"})
-                continue
+                # Fetch full JD for all non-filtered jobs
+                try:
+                    jd_text = fetch_full_jd(job["slug"], config, pw_page)
+                except PlaywrightError as exc:
+                    print(f"\n  Network error fetching JD for '{job['title']}': {exc} — skipping job.")
+                    continue
 
-            if classified.get("flagged_for_review"):
-                review.append(classified)
-            else:
-                accepted.append(classified)
+                classified = classify_job(job, jd_text, feedback, config, is_ambiguous=(action == "ambiguous"))
+
+                if not classified["relevant"]:
+                    filtered.append({**job, "filter_reason": "Claude: not relevant"})
+                    continue
+
+                if classified.get("flagged_for_review"):
+                    review.append(classified)
+                else:
+                    accepted.append(classified)
 
     print()  # newline after the inline page counter
     return accepted, review, filtered, duplicate_count, pages_scraped, network_error

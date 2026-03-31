@@ -497,7 +497,8 @@ def test_pipeline_accepts_relevant_job():
 
     with patch("scraper.fetch_results_page") as mock_page, \
          patch("scraper.fetch_full_jd") as mock_jd, \
-         patch("scraper._check_robots"):
+         patch("scraper._check_robots"), \
+         patch("scraper.sync_playwright"):
         # Page 1 has 1 job, page 2 is empty → stops
         mock_page.side_effect = [page1_jobs, []]
         mock_jd.return_value = "3-5 years Python experience with Django and AWS."
@@ -524,7 +525,8 @@ def test_pipeline_filters_non_technical():
 
     with patch("scraper.fetch_results_page") as mock_page, \
          patch("scraper.fetch_full_jd") as mock_jd, \
-         patch("scraper._check_robots"):
+         patch("scraper._check_robots"), \
+         patch("scraper.sync_playwright"):
         mock_page.side_effect = [page1_jobs, []]
         mock_jd.return_value = ""
 
@@ -547,7 +549,8 @@ def test_pipeline_deduplicates_within_run():
 
     with patch("scraper.fetch_results_page") as mock_page, \
          patch("scraper.fetch_full_jd") as mock_jd, \
-         patch("scraper._check_robots"):
+         patch("scraper._check_robots"), \
+         patch("scraper.sync_playwright"):
         # Same job appears on page 1 and page 2
         mock_page.side_effect = [[same_job], [same_job]]
         mock_jd.return_value = "2 years Python experience."
@@ -573,7 +576,8 @@ def test_pipeline_stops_at_max_pages():
 
     with patch("scraper.fetch_results_page") as mock_page, \
          patch("scraper.fetch_full_jd") as mock_jd, \
-         patch("scraper._check_robots"):
+         patch("scraper._check_robots"), \
+         patch("scraper.sync_playwright"):
         mock_page.return_value = infinite_page  # always returns results
         mock_jd.return_value = "2 years Python experience."
 
@@ -602,7 +606,8 @@ def test_pipeline_filters_feedback_rejected_title():
 
     with patch("scraper.fetch_results_page") as mock_page, \
          patch("scraper.fetch_full_jd") as mock_jd, \
-         patch("scraper._check_robots"):
+         patch("scraper._check_robots"), \
+         patch("scraper.sync_playwright"):
         mock_page.side_effect = [page1, []]
         mock_jd.return_value = "Some description."
 
@@ -633,7 +638,8 @@ def test_pipeline_routes_low_confidence_to_review():
     with patch("scraper.fetch_results_page") as mock_page, \
          patch("scraper.fetch_full_jd") as mock_jd, \
          patch("scraper.claude_classify") as mock_claude, \
-         patch("scraper._check_robots"):
+         patch("scraper._check_robots"), \
+         patch("scraper.sync_playwright"):
         mock_page.side_effect = [page1_jobs, []]
         mock_jd.return_value = "Some technical description."
         mock_claude.return_value = mock_claude_result
@@ -660,7 +666,8 @@ def test_pipeline_pages_scraped_correct_on_early_empty_page():
 
     with patch("scraper.fetch_results_page") as mock_page, \
          patch("scraper.fetch_full_jd") as mock_jd, \
-         patch("scraper._check_robots"):
+         patch("scraper._check_robots"), \
+         patch("scraper.sync_playwright"):
         # Page 1 has jobs, page 2 is empty → stops after 1 page
         mock_page.side_effect = [page1_jobs, []]
         mock_jd.return_value = "2 years Python experience."
@@ -703,7 +710,8 @@ def test_pipeline_stops_at_cutoff_days():
          patch("scraper.fetch_full_jd") as mock_jd, \
          patch("scraper._check_robots"), \
          patch("scraper.load_seen_ids", return_value=set()), \
-         patch("scraper.save_seen_ids"):
+         patch("scraper.save_seen_ids"), \
+         patch("scraper.sync_playwright"):
         mock_page.side_effect = [page1, page2]
         mock_jd.return_value = "2 years Python."
 
@@ -727,7 +735,8 @@ def test_pipeline_skips_seen_ids_across_runs():
 
     with patch("scraper.fetch_results_page") as mock_page, \
          patch("scraper.fetch_full_jd") as mock_jd, \
-         patch("scraper._check_robots"):
+         patch("scraper._check_robots"), \
+         patch("scraper.sync_playwright"):
         mock_page.side_effect = [page1, []]
         mock_jd.return_value = "2 years Python."
 
@@ -963,7 +972,8 @@ def test_end_to_end_smoke(tmp_path):
     with patch("scraper.fetch_results_page") as mock_page, \
          patch("scraper.fetch_full_jd") as mock_jd, \
          patch("scraper._check_robots"), \
-         patch("scraper.anthropic.Anthropic") as MockClient:
+         patch("scraper.anthropic.Anthropic") as MockClient, \
+         patch("scraper.sync_playwright"):
 
         mock_page.side_effect = [page1, []]
         mock_jd.return_value = "3-5 years of Python, Django, REST API experience."
