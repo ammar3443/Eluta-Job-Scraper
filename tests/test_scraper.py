@@ -792,3 +792,79 @@ def test_write_filtered_json_correct_structure(tmp_path):
     assert isinstance(data, list)
     assert data[0]["title"] == "Civil Engineer"
     assert "filter_reason" in data[0]
+
+
+# ---------------------------------------------------------------------------
+# TASK 13: Feedback Ingester Tests
+# ---------------------------------------------------------------------------
+
+def test_ingest_feedback_from_review_xlsx(tmp_path):
+    from scraper import write_review_xlsx, ingest_feedback
+    # Create a review file with user decisions filled in
+    jobs = [
+        {"job_id": "abc123", "title": "Platform Engineer", "company": "Acme",
+         "date_posted": "1 day ago", "category": "cloud_devops", "yoe_required": "2-3",
+         "url": "https://www.eluta.ca/spl/abc123", "confidence": 0.55,
+         "confirm": "yes", "reason": "Uses AWS and Kubernetes"},
+        {"job_id": "def456", "title": "Project Coordinator", "company": "Corp",
+         "date_posted": "2 days ago", "category": "general_swe", "yoe_required": "unknown",
+         "url": "https://www.eluta.ca/spl/def456", "confidence": 0.50,
+         "confirm": "no", "reason": "Not a technical role"},
+    ]
+    review_path = tmp_path / "review.xlsx"
+    write_review_xlsx(jobs, str(review_path))
+
+    feedback = {"decisions": [], "ambiguous_titles": []}
+    updated = ingest_feedback(str(review_path), feedback)
+
+    assert len(updated["decisions"]) == 2
+    confirmed = next(d for d in updated["decisions"] if d["title"] == "Platform Engineer")
+    assert confirmed["relevant"] is True
+    assert confirmed["category"] == "cloud_devops"
+
+    rejected = next(d for d in updated["decisions"] if d["title"] == "Project Coordinator")
+    assert rejected["relevant"] is False
+
+
+def test_ingest_feedback_from_dispute_json(tmp_path):
+    from scraper import ingest_feedback
+    disputed = [
+        {
+            "job_id": "abc123",
+            "title": "Controls Engineer",
+            "company": "Acme",
+            "date_posted": "1 day ago",
+            "snippet": "Python and PLC experience required.",
+            "filter_reason": "non-technical blocklist match: 'engineer'",
+            "url": "https://www.eluta.ca/spl/abc123",
+            "dispute": True,
+            "reason": "Software controls role — Python and PLC",
+        }
+    ]
+    json_path = tmp_path / "filtered.json"
+    json_path.write_text(json.dumps(disputed))
+
+    feedback = {"decisions": [], "ambiguous_titles": []}
+    updated = ingest_feedback(str(json_path), feedback)
+
+    # Title added to ambiguous list (goes to Claude next run)
+    assert "controls engineer" in [t.lower() for t in updated["ambiguous_titles"]]
+    # Also added as positive few-shot example
+    assert any(d["title"] == "Controls Engineer" and d["relevant"] is True
+               for d in updated["decisions"])
+
+
+def test_ingest_feedback_skips_json_without_dispute_flag(tmp_path):
+    from scraper import ingest_feedback
+    jobs = [
+        {"job_id": "abc123", "title": "Civil Engineer", "filter_reason": "non-technical",
+         "snippet": "", "company": "", "date_posted": "", "url": ""}
+        # No "dispute" key
+    ]
+    json_path = tmp_path / "filtered.json"
+    json_path.write_text(json.dumps(jobs))
+
+    feedback = {"decisions": [], "ambiguous_titles": []}
+    updated = ingest_feedback(str(json_path), feedback)
+    assert len(updated["decisions"]) == 0
+    assert len(updated["ambiguous_titles"]) == 0

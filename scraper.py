@@ -602,3 +602,83 @@ def write_filtered_json(jobs: list[dict], filepath: str) -> None:
     records = [{k: job.get(k, "") for k in _FILTERED_FIELDS} for job in jobs]
     with open(filepath, "w") as f:
         json.dump(records, f, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# Feedback Ingester
+# ---------------------------------------------------------------------------
+
+def _ingest_from_review_xlsx(filepath: str, feedback: dict) -> dict:
+    """Process a review XLSX file. Reads confirm/reason columns filled in by user."""
+    from openpyxl import load_workbook
+    wb = load_workbook(filepath)
+    ws = wb.active
+
+    # Find column indices from header row
+    headers = {ws.cell(1, c).value: c for c in range(1, ws.max_column + 1)}
+    required = {"title", "category", "confirm", "reason"}
+    if not required.issubset(headers.keys()):
+        print(f"Warning: review file missing columns {required - set(headers.keys())}")
+        return feedback
+
+    for row in range(2, ws.max_row + 1):
+        confirm_val = ws.cell(row, headers["confirm"]).value
+        if not confirm_val:
+            continue  # User left this row blank — skip
+        title = ws.cell(row, headers["title"]).value or ""
+        category = ws.cell(row, headers["category"]).value or "general_swe"
+        reason = ws.cell(row, headers["reason"]).value or ""
+        confirmed = str(confirm_val).strip().lower() in ("yes", "y", "true", "1")
+
+        feedback["decisions"].append({
+            "title": title,
+            "relevant": confirmed,
+            "category": category if confirmed else None,
+            "reason": reason,
+            "source": "review",
+        })
+
+    return feedback
+
+
+def _ingest_from_dispute_json(filepath: str, feedback: dict) -> dict:
+    """Process a filtered JSON file. Only processes entries with dispute: true."""
+    with open(filepath) as f:
+        jobs = json.load(f)
+
+    for job in jobs:
+        if not job.get("dispute"):
+            continue
+        title = job.get("title", "")
+        reason = job.get("reason", "")
+
+        # Add to ambiguous list (bypasses hard filter next run → goes to Claude)
+        title_lower = title.lower().strip()
+        if title_lower not in [t.lower() for t in feedback["ambiguous_titles"]]:
+            feedback["ambiguous_titles"].append(title_lower)
+
+        # Add as positive few-shot example for Claude
+        feedback["decisions"].append({
+            "title": title,
+            "relevant": True,
+            "category": "general_swe",  # Claude will re-classify properly next run
+            "reason": reason,
+            "source": "dispute",
+        })
+
+    return feedback
+
+
+def ingest_feedback(filepath: str, feedback: dict) -> dict:
+    """
+    Auto-detect file type by extension and ingest feedback.
+    .xlsx → review file (confirm/reject borderline jobs)
+    .json → dispute file (contest hard-filtered jobs)
+    """
+    if filepath.endswith(".xlsx"):
+        return _ingest_from_review_xlsx(filepath, feedback)
+    elif filepath.endswith(".json"):
+        return _ingest_from_dispute_json(filepath, feedback)
+    else:
+        print(f"Unknown file type: {filepath}. Expected .xlsx or .json")
+        return feedback
