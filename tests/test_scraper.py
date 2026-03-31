@@ -430,12 +430,10 @@ def test_fetch_results_page_empty_returns_empty_list():
 def test_fetch_full_jd_returns_text():
     from scraper import fetch_full_jd
     config = {"scraper": {"delay_min": 0, "delay_max": 0}}
-    with patch("scraper.requests.get") as mock_get:
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.text = SAMPLE_SPL_HTML
-        mock_get.return_value = mock_resp
-        text = fetch_full_jd("spl/backend-developer-abc123def456?imo=1", config)
+    pw_page = MagicMock()
+    pw_page.goto.return_value = MagicMock(status=200)
+    pw_page.content.return_value = SAMPLE_SPL_HTML
+    text = fetch_full_jd("spl/backend-developer-abc123def456?imo=1", config, pw_page)
     assert "Python" in text
     assert "Django" in text
     assert "3-5 years" in text
@@ -444,12 +442,10 @@ def test_fetch_full_jd_returns_text():
 def test_fetch_full_jd_returns_empty_on_parse_failure():
     from scraper import fetch_full_jd
     config = {"scraper": {"delay_min": 0, "delay_max": 0}}
-    with patch("scraper.requests.get") as mock_get:
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.text = "<html><body><p>No description here.</p></body></html>"
-        mock_get.return_value = mock_resp
-        text = fetch_full_jd("spl/some-job?imo=1", config)
+    pw_page = MagicMock()
+    pw_page.goto.return_value = MagicMock(status=200)
+    pw_page.content.return_value = "<html><body><p>No description here.</p></body></html>"
+    text = fetch_full_jd("spl/some-job?imo=1", config, pw_page)
     assert text == ""
 
 

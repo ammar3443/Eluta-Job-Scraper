@@ -414,18 +414,16 @@ def fetch_results_page(page_num: int, query: str, config: dict, pw_page) -> list
     return jobs
 
 
-def fetch_full_jd(slug: str, config: dict, session: requests.Session | None = None) -> str:
+def fetch_full_jd(slug: str, config: dict, pw_page) -> str:
     """
     Fetch the full job description from the /spl/ page.
     Returns plain text of the description, or empty string on failure.
     """
-    # slug may be "spl/job-title-hash?imo=N" — build full URL
     url = f"{ELUTA_BASE}/{slug}" if not slug.startswith("http") else slug
     _polite_delay(config)
-    requester = session or requests
-    resp = requester.get(url, headers=HEADERS, timeout=30)
-    resp.raise_for_status()
-    soup = BeautifulSoup(resp.text, "html.parser")
+    pw_page.goto(url, wait_until="domcontentloaded", timeout=30000)
+    html = pw_page.content()
+    soup = BeautifulSoup(html, "html.parser")
 
     desc = soup.find(class_="short-text")
     if not desc:
