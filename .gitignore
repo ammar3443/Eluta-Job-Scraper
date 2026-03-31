@@ -10,3 +10,4 @@ feedback.json
 seen_jobs.json
 .claude/
 logs/
+.eluta_session.json

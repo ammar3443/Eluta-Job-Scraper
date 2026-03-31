@@ -56,6 +56,7 @@ categories:
 
 filters:
   seniority_blocklist:
+    - "MTS"
     - " lead"
     - " staff"
     - "team lead"
@@ -81,7 +82,7 @@ classifier:
   max_few_shot_examples: 15
 
 scraper:
-  delay_min: 2
-  delay_max: 5
+  delay_min: 10
+  delay_max: 20
   respect_robots_txt: true
   cutoff_days: 3  # stop scraping jobs older than this many days (set to 0 to disable)

@@ -27,6 +27,10 @@ from openpyxl.utils import get_column_letter
 
 ELUTA_BASE = "https://www.eluta.ca"
 ELUTA_SEARCH = f"{ELUTA_BASE}/search"
+STORAGE_STATE_FILE = ".eluta_session.json"
+
+PLAYWRIGHT_TIMEOUT_MS = 30000
+FUZZY_MATCH_THRESHOLD = 0.85
 
 CATEGORY_COLORS = {
     "backend":     "B8CCE4",
@@ -47,6 +51,13 @@ HEADERS = {
         "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     )
 }
+
+# CSS selectors for job cards on Eluta
+JOB_CARD_SELECTOR = "organic-job"
+JOB_TITLE_SELECTOR = ("a", "lk-job-title")
+JOB_COMPANY_SELECTOR = ("a", "lk-employer")
+JOB_DESC_SELECTOR = ("span", "description")
+JOB_DATE_SELECTOR = ("a", "lastseen")
 
 # ---------------------------------------------------------------------------
 # Config + Feedback
@@ -210,14 +221,11 @@ def keyword_classify(title: str, categories: dict) -> str | None:
 # Feedback Lookup
 # ---------------------------------------------------------------------------
 
-_FUZZY_THRESHOLD = 0.85
-
-
 def feedback_lookup(title: str, feedback: dict) -> dict | None:
     """
     Check feedback decisions for a matching title.
     Returns the decision dict {title, relevant, category, reason} or None.
-    Tries exact match first, then fuzzy match with ratio >= 0.85.
+    Tries exact match first, then fuzzy match with ratio >= FUZZY_MATCH_THRESHOLD.
     """
     title_lower = title.lower().strip()
     decisions = feedback.get("decisions", [])
@@ -236,7 +244,7 @@ def feedback_lookup(title: str, feedback: dict) -> dict | None:
             best_ratio = ratio
             best_decision = d
 
-    if best_ratio >= _FUZZY_THRESHOLD:
+    if best_ratio >= FUZZY_MATCH_THRESHOLD:
         return best_decision
 
     return None
@@ -370,27 +378,48 @@ def _extract_job_id(slug: str) -> str:
     return match.group(1) if match else slug.split("?")[0]
 
 
+def _launch_playwright_page(headless: bool = True):
+    """Launch Playwright browser and return context, page. Caller must handle cleanup."""
+    p = sync_playwright().__enter__()
+    browser = p.chromium.launch(
+        headless=headless,
+        args=["--disable-blink-features=AutomationControlled"],
+    )
+    context_kwargs = {
+        "user_agent": HEADERS["User-Agent"],
+        "extra_http_headers": {"Accept-Language": "en-US,en;q=0.9"},
+    }
+    # Load saved session state if it exists
+    if os.path.exists(STORAGE_STATE_FILE):
+        context_kwargs["storage_state"] = STORAGE_STATE_FILE
+
+    context = browser.new_context(**context_kwargs)
+    context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+    return p, browser, context, context.new_page()
+
+
 def fetch_results_page(page_num: int, query: str, config: dict, pw_page) -> list[dict]:
     """
     Fetch one search results page from Eluta.
     Returns list of job dicts: {title, company, snippet, date_posted, job_id, slug, url}
     """
     # Eluta uses "pg" for pagination; page 1 has no pg parameter, pages 2+ use pg=N
-    params = {"q": query}
+    # Append sort:post to sort results by date posted
+    params = {"q": f"{query} sort:post"}
     if page_num > 1:
         params["pg"] = page_num
     url = f"{ELUTA_SEARCH}?{urlencode(params)}"
     _polite_delay(config)
-    pw_page.goto(url, wait_until="domcontentloaded", timeout=30000)
+    pw_page.goto(url, wait_until="domcontentloaded", timeout=PLAYWRIGHT_TIMEOUT_MS)
     html = pw_page.content()
     soup = BeautifulSoup(html, "html.parser")
 
     jobs = []
-    for card in soup.find_all(class_="organic-job"):
-        title_tag = card.find("a", class_="lk-job-title")
-        company_tag = card.find("a", class_="lk-employer")
-        desc_tag = card.find("span", class_="description")
-        date_tag = card.find("a", class_="lastseen")
+    for card in soup.find_all(class_=JOB_CARD_SELECTOR):
+        title_tag = card.find(JOB_TITLE_SELECTOR[0], class_=JOB_TITLE_SELECTOR[1])
+        company_tag = card.find(JOB_COMPANY_SELECTOR[0], class_=JOB_COMPANY_SELECTOR[1])
+        desc_tag = card.find(JOB_DESC_SELECTOR[0], class_=JOB_DESC_SELECTOR[1])
+        date_tag = card.find(JOB_DATE_SELECTOR[0], class_=JOB_DATE_SELECTOR[1])
         slug = card.get("data-url", "")
 
         if not title_tag or not slug:
@@ -421,7 +450,7 @@ def fetch_full_jd(slug: str, config: dict, pw_page) -> str:
     """
     url = f"{ELUTA_BASE}/{slug}" if not slug.startswith("http") else slug
     _polite_delay(config)
-    pw_page.goto(url, wait_until="domcontentloaded", timeout=30000)
+    pw_page.goto(url, wait_until="domcontentloaded", timeout=PLAYWRIGHT_TIMEOUT_MS)
     html = pw_page.content()
     soup = BeautifulSoup(html, "html.parser")
 
@@ -450,29 +479,27 @@ def classify_job(job: dict, jd_text: str, feedback: dict, config: dict, is_ambig
         # Step 1: feedback lookup
         fb_decision = feedback_lookup(title, feedback)
         if fb_decision:
-            if not fb_decision["relevant"]:
-                # Previously confirmed as not relevant — filter it
-                return {**job, "relevant": False, "category": None,
-                        "confidence": None, "flagged_for_review": False, "yoe_required": "unknown"}
+            yoe = extract_yoe(jd_text)
             return {
                 **job,
-                "relevant": True,
-                "category": fb_decision["category"] or "general_swe",
+                "relevant": fb_decision["relevant"],
+                "category": fb_decision["category"] or "general_swe" if fb_decision["relevant"] else None,
                 "confidence": None,  # blank for feedback-matched jobs (spec)
                 "flagged_for_review": False,
-                "yoe_required": extract_yoe(jd_text),
+                "yoe_required": yoe if fb_decision["relevant"] else "unknown",
             }
 
         # Step 2: keyword match
         kw_category = keyword_classify(title, config["categories"])
         if kw_category:
+            yoe = extract_yoe(jd_text)
             return {
                 **job,
                 "relevant": True,
                 "category": kw_category,
                 "confidence": None,  # blank for keyword-matched jobs (spec)
                 "flagged_for_review": False,
-                "yoe_required": extract_yoe(jd_text),
+                "yoe_required": yoe,
             }
 
     # Step 3: Claude
@@ -488,7 +515,45 @@ def classify_job(job: dict, jd_text: str, feedback: dict, config: dict, is_ambig
     }
 
 
-def run_scrape(config: dict, feedback: dict, seen_ids: set[str] | None = None) -> tuple[list, list, list, int, int, str | None]:
+def _process_job(job: dict, config: dict, feedback: dict, seen_ids: set[str],
+                 ambiguous_titles: set, pw_page, accepted: list, review: list, filtered: list) -> tuple[int, str | None]:
+    """
+    Process a single job through the classification pipeline.
+    Returns (duplicate_count, network_error).
+    """
+    jid = job["job_id"]
+    if jid in seen_ids:
+        return 1, None
+    seen_ids.add(jid)
+
+    action, reason = hard_filter(job["title"], config, ambiguous_titles)
+
+    if action == "filter":
+        filtered.append({**job, "filter_reason": reason})
+        return 0, None
+
+    # Fetch full JD for all non-filtered jobs
+    try:
+        jd_text = fetch_full_jd(job["slug"], config, pw_page)
+    except PlaywrightError as exc:
+        print(f"\n  Network error fetching JD for '{job['title']}': {exc} — skipping job.")
+        return 0, None
+
+    classified = classify_job(job, jd_text, feedback, config, is_ambiguous=(action == "ambiguous"))
+
+    if not classified["relevant"]:
+        filtered.append({**job, "filter_reason": "Claude: not relevant"})
+        return 0, None
+
+    if classified.get("flagged_for_review"):
+        review.append(classified)
+    else:
+        accepted.append(classified)
+
+    return 0, None
+
+
+def run_scrape(config: dict, feedback: dict, seen_ids: set[str] | None = None, headless: bool = True) -> tuple[list, list, list, int, int, str | None]:
     """
     Main scrape loop. Returns (accepted, review, filtered, duplicate_count, pages_scraped).
     - accepted: classified jobs above confidence threshold
@@ -498,6 +563,7 @@ def run_scrape(config: dict, feedback: dict, seen_ids: set[str] | None = None) -
     - pages_scraped: number of result pages fetched
 
     seen_ids: set of job IDs already processed in previous runs (passed in from main).
+    headless: if False, launches visible browser for manual CAPTCHA solving.
     """
     _check_robots(config)
 
@@ -519,13 +585,18 @@ def run_scrape(config: dict, feedback: dict, seen_ids: set[str] | None = None) -
 
     with sync_playwright() as p:
         browser = p.chromium.launch(
-            headless=True,
+            headless=headless,
             args=["--disable-blink-features=AutomationControlled"],
         )
-        context = browser.new_context(
-            user_agent=HEADERS["User-Agent"],
-            extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
-        )
+        context_kwargs = {
+            "user_agent": HEADERS["User-Agent"],
+            "extra_http_headers": {"Accept-Language": "en-US,en;q=0.9"},
+        }
+        # Load saved session state if it exists
+        if os.path.exists(STORAGE_STATE_FILE):
+            context_kwargs["storage_state"] = STORAGE_STATE_FILE
+
+        context = browser.new_context(**context_kwargs)
         context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         pw_page = context.new_page()
 
@@ -555,35 +626,13 @@ def run_scrape(config: dict, feedback: dict, seen_ids: set[str] | None = None) -
             print(f"\r  Page {pages_scraped}...", end="", flush=True)
 
             for job in page_jobs:
-                jid = job["job_id"]
-                if jid in seen_ids:
-                    duplicate_count += 1
-                    continue
-                seen_ids.add(jid)
+                dup_count, err = _process_job(job, config, feedback, seen_ids, ambiguous_titles, pw_page, accepted, review, filtered)
+                duplicate_count += dup_count
+                if err:
+                    network_error = err
 
-                action, reason = hard_filter(job["title"], config, ambiguous_titles)
-
-                if action == "filter":
-                    filtered.append({**job, "filter_reason": reason})
-                    continue
-
-                # Fetch full JD for all non-filtered jobs
-                try:
-                    jd_text = fetch_full_jd(job["slug"], config, pw_page)
-                except PlaywrightError as exc:
-                    print(f"\n  Network error fetching JD for '{job['title']}': {exc} — skipping job.")
-                    continue
-
-                classified = classify_job(job, jd_text, feedback, config, is_ambiguous=(action == "ambiguous"))
-
-                if not classified["relevant"]:
-                    filtered.append({**job, "filter_reason": "Claude: not relevant"})
-                    continue
-
-                if classified.get("flagged_for_review"):
-                    review.append(classified)
-                else:
-                    accepted.append(classified)
+        # Save session state (cookies, localStorage) for future runs
+        context.storage_state(path=STORAGE_STATE_FILE)
 
     print()  # newline after the inline page counter
     return accepted, review, filtered, duplicate_count, pages_scraped, network_error
@@ -647,7 +696,8 @@ def _write_job_row(ws, row_idx: int, job: dict, columns: list[str]) -> None:
         cell.fill = row_fill
 
 
-def write_accepted_xlsx(jobs: list[dict], filepath: str) -> None:
+def _load_or_create_workbook(filepath: str, columns: list[str], sheet_name: str) -> tuple:
+    """Load existing workbook or create new one with formatting."""
     if os.path.exists(filepath):
         wb = load_workbook(filepath)
         ws = wb.active
@@ -655,25 +705,21 @@ def write_accepted_xlsx(jobs: list[dict], filepath: str) -> None:
     else:
         wb = Workbook()
         ws = wb.active
-        ws.title = "Jobs"
-        _apply_xlsx_formatting(ws, _ACCEPTED_COLUMNS)
+        ws.title = sheet_name
+        _apply_xlsx_formatting(ws, columns)
         next_row = 2
+    return wb, ws, next_row
+
+
+def write_accepted_xlsx(jobs: list[dict], filepath: str) -> None:
+    wb, ws, next_row = _load_or_create_workbook(filepath, _ACCEPTED_COLUMNS, "Jobs")
     for i, job in enumerate(jobs, start=next_row):
         _write_job_row(ws, i, job, _ACCEPTED_COLUMNS)
     wb.save(filepath)
 
 
 def write_review_xlsx(jobs: list[dict], filepath: str) -> None:
-    if os.path.exists(filepath):
-        wb = load_workbook(filepath)
-        ws = wb.active
-        next_row = ws.max_row + 1
-    else:
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "Review"
-        _apply_xlsx_formatting(ws, _REVIEW_COLUMNS)
-        next_row = 2
+    wb, ws, next_row = _load_or_create_workbook(filepath, _REVIEW_COLUMNS, "Review")
     for i, job in enumerate(jobs, start=next_row):
         _write_job_row(ws, i, job, _REVIEW_COLUMNS)
         # Leave confirm and reason blank for user to fill
@@ -885,6 +931,10 @@ def main() -> None:
         "--unschedule", action="store_true",
         help="Remove the scheduled cron job"
     )
+    parser.add_argument(
+        "--no-headless", action="store_true",
+        help="Show browser window for manual CAPTCHA solving (headless=False)"
+    )
     args = parser.parse_args()
 
     if args.schedule:
@@ -919,7 +969,7 @@ def main() -> None:
 
     seen_ids = load_seen_ids()
     try:
-        accepted, review, filtered, dup_count, pages_scraped, network_error = run_scrape(config, feedback, seen_ids)
+        accepted, review, filtered, dup_count, pages_scraped, network_error = run_scrape(config, feedback, seen_ids, headless=not args.no_headless)
     except anthropic.AuthenticationError:
         sys.exit("Error: ANTHROPIC_API_KEY is missing or invalid. Set it with: export ANTHROPIC_API_KEY=...")
     save_seen_ids(seen_ids)
