@@ -9,3 +9,4 @@ output/
 feedback.json
 seen_jobs.json
 .claude/
+logs/

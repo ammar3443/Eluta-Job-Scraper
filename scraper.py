@@ -2,12 +2,14 @@
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 import random
 import argparse
 from datetime import date
 from difflib import SequenceMatcher
+from pathlib import Path
 from urllib.robotparser import RobotFileParser
 
 import yaml
@@ -524,7 +526,8 @@ def run_scrape(config: dict, feedback: dict, seen_ids: set[str] | None = None) -
             break
 
         if not page_jobs:
-            break  # No more results
+            print(f"\n  No more results at page {page}, stopping.")
+            break
 
         # Date cutoff: if every job on this page is older than cutoff_days, stop.
         # Filter to only jobs within the cutoff before processing.
@@ -632,21 +635,33 @@ def _write_job_row(ws, row_idx: int, job: dict, columns: list[str]) -> None:
 
 
 def write_accepted_xlsx(jobs: list[dict], filepath: str) -> None:
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Jobs"
-    _apply_xlsx_formatting(ws, _ACCEPTED_COLUMNS)
-    for i, job in enumerate(jobs, start=2):
+    if os.path.exists(filepath):
+        wb = load_workbook(filepath)
+        ws = wb.active
+        next_row = ws.max_row + 1
+    else:
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Jobs"
+        _apply_xlsx_formatting(ws, _ACCEPTED_COLUMNS)
+        next_row = 2
+    for i, job in enumerate(jobs, start=next_row):
         _write_job_row(ws, i, job, _ACCEPTED_COLUMNS)
     wb.save(filepath)
 
 
 def write_review_xlsx(jobs: list[dict], filepath: str) -> None:
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Review"
-    _apply_xlsx_formatting(ws, _REVIEW_COLUMNS)
-    for i, job in enumerate(jobs, start=2):
+    if os.path.exists(filepath):
+        wb = load_workbook(filepath)
+        ws = wb.active
+        next_row = ws.max_row + 1
+    else:
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Review"
+        _apply_xlsx_formatting(ws, _REVIEW_COLUMNS)
+        next_row = 2
+    for i, job in enumerate(jobs, start=next_row):
         _write_job_row(ws, i, job, _REVIEW_COLUMNS)
         # Leave confirm and reason blank for user to fill
     wb.save(filepath)
@@ -662,6 +677,10 @@ _FILTERED_FIELDS = ["job_id", "title", "company", "date_posted", "snippet",
 
 def write_filtered_json(jobs: list[dict], filepath: str) -> None:
     records = [{k: job.get(k, "") for k in _FILTERED_FIELDS} for job in jobs]
+    if os.path.exists(filepath):
+        with open(filepath, "r") as f:
+            existing = json.load(f)
+        records = existing + records
     with open(filepath, "w") as f:
         json.dump(records, f, indent=2)
 
@@ -769,6 +788,67 @@ def print_summary(accepted: list, review: list, filtered: list,
 
 
 # ---------------------------------------------------------------------------
+# Scheduler
+# ---------------------------------------------------------------------------
+
+CRON_MARKER = "# jobscraper-managed"
+
+
+def _project_dir() -> str:
+    return str(Path(__file__).resolve().parent)
+
+
+def _venv_python() -> str:
+    return str(Path(_project_dir()) / "venv" / "bin" / "python")
+
+
+def _cron_entry(interval_hours: int) -> str:
+    project = _project_dir()
+    python = _venv_python()
+    log = str(Path(project) / "logs" / "scraper.log")
+    return (
+        f"0 */{interval_hours} * * * "
+        f"cd {project} && {python} scraper.py "
+        f">> {log} 2>&1 {CRON_MARKER}"
+    )
+
+
+def _read_crontab() -> str:
+    result = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
+    # crontab -l exits with code 1 and prints "no crontab for user" when empty — treat as blank
+    if result.returncode != 0:
+        return ""
+    return result.stdout
+
+
+def _write_crontab(content: str) -> None:
+    subprocess.run(["crontab", "-"], input=content, text=True, check=True)
+
+
+def schedule(interval_hours: int) -> None:
+    os.makedirs(Path(_project_dir()) / "logs", exist_ok=True)
+    current = _read_crontab()
+
+    # Remove any existing managed entry before adding the new one
+    lines = [l for l in current.splitlines() if CRON_MARKER not in l]
+    lines.append(_cron_entry(interval_hours))
+    _write_crontab("\n".join(lines) + "\n")
+    print(f"Scheduled: scraper will run every {interval_hours} hours.")
+    print(f"Logs → {_project_dir()}/logs/scraper.log")
+    print("To turn off: python scraper.py --unschedule")
+
+
+def unschedule() -> None:
+    current = _read_crontab()
+    if CRON_MARKER not in current:
+        print("No scheduled job found.")
+        return
+    lines = [l for l in current.splitlines() if CRON_MARKER not in l]
+    _write_crontab("\n".join(lines) + "\n")
+    print("Scheduler turned off.")
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -780,7 +860,27 @@ def main() -> None:
     )
     parser.add_argument("--config", default="config.yaml", help="Path to config file")
     parser.add_argument("--feedback", default="feedback.json", help="Path to feedback file")
+    parser.add_argument(
+        "--schedule", action="store_true",
+        help="Schedule the scraper to run automatically via cron"
+    )
+    parser.add_argument(
+        "--interval", type=int, default=6, metavar="HOURS",
+        help="How often to run when scheduled (default: 6 hours)"
+    )
+    parser.add_argument(
+        "--unschedule", action="store_true",
+        help="Remove the scheduled cron job"
+    )
     args = parser.parse_args()
+
+    if args.schedule:
+        schedule(args.interval)
+        return
+
+    if args.unschedule:
+        unschedule()
+        return
 
     config = load_config(args.config)
     feedback = load_feedback(args.feedback)

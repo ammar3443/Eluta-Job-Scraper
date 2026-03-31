@@ -50,6 +50,36 @@ Saved → output/eluta_2026-03-30.xlsx
 
 ---
 
+## Automating the scraper
+
+You can schedule the scraper to run automatically using a single command.
+
+**Turn on** (runs every 6 hours by default):
+
+```bash
+python scraper.py --schedule
+```
+
+**Custom interval** (e.g. every 12 hours):
+
+```bash
+python scraper.py --schedule --interval 12
+```
+
+**Turn off:**
+
+```bash
+python scraper.py --unschedule
+```
+
+When scheduled, output is logged to `logs/scraper.log` instead of the terminal. To check on recent runs:
+
+```bash
+tail -50 logs/scraper.log
+```
+
+---
+
 ## Output files
 
 Three files are created per run in the `output/` folder:
