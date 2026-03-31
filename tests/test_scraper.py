@@ -868,3 +868,62 @@ def test_ingest_feedback_skips_json_without_dispute_flag(tmp_path):
     updated = ingest_feedback(str(json_path), feedback)
     assert len(updated["decisions"]) == 0
     assert len(updated["ambiguous_titles"]) == 0
+
+
+# ---------------------------------------------------------------------------
+# TASK 15: End-to-End Smoke Test
+# ---------------------------------------------------------------------------
+
+def test_end_to_end_smoke(tmp_path, monkeypatch):
+    """
+    Full pipeline smoke test with mocked HTTP and Claude.
+    Verifies XLSX + JSON files are created and contain expected data.
+    """
+    from scraper import run_scrape, write_accepted_xlsx, write_review_xlsx, write_filtered_json
+
+    config = _make_full_config()
+    feedback = {"decisions": [], "ambiguous_titles": []}
+
+    page1 = [
+        {"title": "Backend Developer", "company": "Acme", "snippet": "Python APIs",
+         "date_posted": "1 day ago", "job_id": "aaa111", "slug": "spl/backend-aaa111?imo=1",
+         "url": "https://www.eluta.ca/spl/aaa111"},
+        {"title": "Civil Engineer", "company": "Build Co", "snippet": "Bridges",
+         "date_posted": "2 days ago", "job_id": "bbb222", "slug": "spl/civil-bbb222?imo=2",
+         "url": "https://www.eluta.ca/spl/bbb222"},
+        {"title": "Technical Specialist", "company": "TechCo", "snippet": "Support role",
+         "date_posted": "1 day ago", "job_id": "ccc333", "slug": "spl/tech-ccc333?imo=3",
+         "url": "https://www.eluta.ca/spl/ccc333"},
+    ]
+
+    mock_claude_response = MagicMock()
+    mock_claude_response.content = [MagicMock(
+        text='{"relevant": true, "category": "general_swe", "confidence": 0.55, "yoe": "2-3"}'
+    )]
+
+    with patch("scraper.fetch_results_page") as mock_page, \
+         patch("scraper.fetch_full_jd") as mock_jd, \
+         patch("scraper._check_robots"), \
+         patch("scraper.anthropic.Anthropic") as MockClient:
+
+        mock_page.side_effect = [page1, []]
+        mock_jd.return_value = "3-5 years of Python, Django, REST API experience."
+        MockClient.return_value.messages.create.return_value = mock_claude_response
+
+        accepted, review, filtered, _, _ = run_scrape(config, feedback)
+
+    # Backend Developer: keyword match → accepted
+    assert any(j["title"] == "Backend Developer" for j in accepted)
+    # Civil Engineer: hard filter → filtered
+    assert any(j["title"] == "Civil Engineer" for j in filtered)
+    # Technical Specialist: Claude confidence 0.55 < 0.60 → review
+    assert any(j["title"] == "Technical Specialist" for j in review)
+
+    # Write outputs and verify files
+    write_accepted_xlsx(accepted, str(tmp_path / "jobs.xlsx"))
+    write_review_xlsx(review, str(tmp_path / "review.xlsx"))
+    write_filtered_json(filtered, str(tmp_path / "filtered.json"))
+
+    assert (tmp_path / "jobs.xlsx").exists()
+    assert (tmp_path / "review.xlsx").exists()
+    assert (tmp_path / "filtered.json").exists()
