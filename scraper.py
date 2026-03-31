@@ -24,7 +24,6 @@ from openpyxl.utils import get_column_letter
 
 ELUTA_BASE = "https://www.eluta.ca"
 ELUTA_SEARCH = f"{ELUTA_BASE}/search"
-ELUTA_SPL = f"{ELUTA_BASE}/spl"
 
 CATEGORY_COLORS = {
     "backend":     "B8CCE4",
@@ -76,7 +75,7 @@ def save_feedback(feedback: dict, path: str = "feedback.json") -> None:
 # Hard Filter
 # ---------------------------------------------------------------------------
 
-def hard_filter(title: str, config: dict, ambiguous_titles: list) -> tuple[str, str | None]:
+def hard_filter(title: str, config: dict, ambiguous_titles: set) -> tuple[str, str | None]:
     """
     Returns (action, reason).
     action: "pass" | "filter" | "ambiguous"
@@ -409,12 +408,12 @@ def classify_job(job: dict, jd_text: str, feedback: dict, config: dict, is_ambig
             if not fb_decision["relevant"]:
                 # Previously confirmed as not relevant — filter it
                 return {**job, "relevant": False, "category": None,
-                        "confidence": 1.0, "flagged_for_review": False, "yoe_required": "unknown"}
+                        "confidence": None, "flagged_for_review": False, "yoe_required": "unknown"}
             return {
                 **job,
                 "relevant": True,
                 "category": fb_decision["category"] or "general_swe",
-                "confidence": 1.0,
+                "confidence": None,  # blank for feedback-matched jobs (spec)
                 "flagged_for_review": False,
                 "yoe_required": extract_yoe(jd_text),
             }
@@ -426,7 +425,7 @@ def classify_job(job: dict, jd_text: str, feedback: dict, config: dict, is_ambig
                 **job,
                 "relevant": True,
                 "category": kw_category,
-                "confidence": 1.0,
+                "confidence": None,  # blank for keyword-matched jobs (spec)
                 "flagged_for_review": False,
                 "yoe_required": extract_yoe(jd_text),
             }
@@ -494,8 +493,7 @@ def run_scrape(config: dict, feedback: dict) -> tuple[list, list, list, int, int
 
             classified = classify_job(job, jd_text, feedback, config, is_ambiguous=(action == "ambiguous"))
 
-            # For Claude-classified jobs: check relevance flag
-            if "relevant" in classified and not classified["relevant"]:
+            if not classified["relevant"]:
                 filtered.append({**job, "filter_reason": "Claude: not relevant"})
                 continue
 
