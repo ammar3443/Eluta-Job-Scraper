@@ -2,6 +2,9 @@
 
 Scrapes eluta.ca for software engineering jobs, filters out irrelevant results, and exports a clean color-coded spreadsheet. Gets smarter over time as you give it feedback.
 
+![Example Output](docs/images/eluta-scraper.png)
+
+
 ---
 
 ## Setup
