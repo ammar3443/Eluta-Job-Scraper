@@ -71,6 +71,38 @@ def save_feedback(feedback: dict, path: str = "feedback.json") -> None:
         json.dump(feedback, f, indent=2)
 
 
+def load_seen_ids(path: str = "seen_jobs.json") -> set[str]:
+    """Load job IDs seen in previous runs."""
+    if not os.path.exists(path):
+        return set()
+    with open(path, "r") as f:
+        return set(json.load(f))
+
+
+def save_seen_ids(seen_ids: set[str], path: str = "seen_jobs.json") -> None:
+    with open(path, "w") as f:
+        json.dump(list(seen_ids), f)
+
+
+def _parse_days_ago(date_str: str) -> int:
+    """Parse Eluta's relative date string to approximate number of days ago."""
+    s = date_str.lower().strip()
+    if not s or "today" in s or "hour" in s or "minute" in s or "just" in s:
+        return 0
+    if "yesterday" in s:
+        return 1
+    m = re.search(r"(\d+)\s*day", s)
+    if m:
+        return int(m.group(1))
+    m = re.search(r"(\d+)\s*week", s)
+    if m:
+        return int(m.group(1)) * 7
+    m = re.search(r"(\d+)\s*month", s)
+    if m:
+        return int(m.group(1)) * 30
+    return 0  # unknown format — don't skip
+
+
 # ---------------------------------------------------------------------------
 # Hard Filter
 # ---------------------------------------------------------------------------
@@ -338,9 +370,12 @@ def fetch_results_page(page: int, query: str, config: dict) -> list[dict]:
     Fetch one search results page from Eluta.
     Returns list of job dicts: {title, company, snippet, date_posted, job_id, slug, url}
     """
-    params = {"q": query, "page": page}
+    # Eluta uses "pg" for pagination; page 1 has no pg parameter, pages 2+ use pg=N
+    params = {"q": query}
+    if page > 1:
+        params["pg"] = page
     _polite_delay(config)
-    resp = requests.get(ELUTA_SEARCH, params=params, headers=HEADERS, timeout=15)
+    resp = requests.get(ELUTA_SEARCH, params=params, headers=HEADERS, timeout=30)
     resp.raise_for_status()  # surface 403/429/5xx immediately instead of silently parsing error HTML
     soup = BeautifulSoup(resp.text, "html.parser")
 
@@ -365,6 +400,11 @@ def fetch_results_page(page: int, query: str, config: dict) -> list[dict]:
             "slug": slug,
             "url": f"{ELUTA_BASE}/{slug.split('?')[0]}",  # clean URL without ?imo= param
         })
+
+    if not jobs:
+        print(f"  [debug] Page {page} returned no jobs. URL: {resp.url}")
+        print(f"  [debug] Response snippet: {resp.text[:500]}")
+
     return jobs
 
 
@@ -376,7 +416,7 @@ def fetch_full_jd(slug: str, config: dict) -> str:
     # slug may be "spl/job-title-hash?imo=N" — build full URL
     url = f"{ELUTA_BASE}/{slug}" if not slug.startswith("http") else slug
     _polite_delay(config)
-    resp = requests.get(url, headers=HEADERS, timeout=15)
+    resp = requests.get(url, headers=HEADERS, timeout=30)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
 
@@ -443,7 +483,7 @@ def classify_job(job: dict, jd_text: str, feedback: dict, config: dict, is_ambig
     }
 
 
-def run_scrape(config: dict, feedback: dict) -> tuple[list, list, list, int, int]:
+def run_scrape(config: dict, feedback: dict, seen_ids: set[str] | None = None) -> tuple[list, list, list, int, int, str | None]:
     """
     Main scrape loop. Returns (accepted, review, filtered, duplicate_count, pages_scraped).
     - accepted: classified jobs above confidence threshold
@@ -451,14 +491,18 @@ def run_scrape(config: dict, feedback: dict) -> tuple[list, list, list, int, int
     - filtered: hard-filtered jobs (non-technical / seniority)
     - duplicate_count: jobs skipped due to duplicate job_id in this run
     - pages_scraped: number of result pages fetched
+
+    seen_ids: set of job IDs already processed in previous runs (passed in from main).
     """
     _check_robots(config)
 
     eluta_cfg = config["sites"]["eluta"]
     query = eluta_cfg["query"]
     max_pages = eluta_cfg["max_pages"]
+    cutoff_days = config["scraper"].get("cutoff_days", 3)
 
-    seen_ids: set[str] = set()
+    if seen_ids is None:
+        seen_ids = set()
     accepted: list[dict] = []
     review: list[dict] = []
     filtered: list[dict] = []
@@ -466,21 +510,38 @@ def run_scrape(config: dict, feedback: dict) -> tuple[list, list, list, int, int
     pages_scraped = 0
     ambiguous_titles = {t.lower() for t in feedback.get("ambiguous_titles", [])}
 
+    network_error: str | None = None
+
     for page in range(1, max_pages + 1):
-        page_jobs = fetch_results_page(page, query, config)
+        try:
+            page_jobs = fetch_results_page(page, query, config)
+        except requests.RequestException as exc:
+            network_error = str(exc)
+            print(f"  Network error on page {page}: {exc}")
+            print("  Saving results collected so far.")
+            break
 
         if not page_jobs:
             break  # No more results
 
+        # Date cutoff: if every job on this page is older than cutoff_days, stop.
+        # Filter to only jobs within the cutoff before processing.
+        if cutoff_days:
+            page_jobs = [j for j in page_jobs
+                         if _parse_days_ago(j.get("date_posted", "")) <= cutoff_days]
+            if not page_jobs:
+                print(f"  Reached {cutoff_days}-day cutoff at page {page}, stopping.")
+                break
+
         pages_scraped += 1
-        page_new = 0
+        print(f"Scraped page {pages_scraped} ({len(page_jobs)} jobs)")
+
         for job in page_jobs:
             jid = job["job_id"]
             if jid in seen_ids:
                 duplicate_count += 1
                 continue
             seen_ids.add(jid)
-            page_new += 1
 
             action, reason = hard_filter(job["title"], config, ambiguous_titles)
 
@@ -489,7 +550,11 @@ def run_scrape(config: dict, feedback: dict) -> tuple[list, list, list, int, int
                 continue
 
             # Fetch full JD for all non-filtered jobs
-            jd_text = fetch_full_jd(job["slug"], config)
+            try:
+                jd_text = fetch_full_jd(job["slug"], config)
+            except requests.RequestException as exc:
+                print(f"  Network error fetching JD for '{job['title']}': {exc} — skipping job.")
+                continue
 
             classified = classify_job(job, jd_text, feedback, config, is_ambiguous=(action == "ambiguous"))
 
@@ -502,11 +567,7 @@ def run_scrape(config: dict, feedback: dict) -> tuple[list, list, list, int, int
             else:
                 accepted.append(classified)
 
-        # Stop if entire page was duplicates
-        if page_new == 0 and page > 1:
-            break
-
-    return accepted, review, filtered, duplicate_count, pages_scraped
+    return accepted, review, filtered, duplicate_count, pages_scraped, network_error
 
 
 # ---------------------------------------------------------------------------
@@ -737,12 +798,12 @@ def main() -> None:
     print(f"Max pages: {config['sites']['eluta']['max_pages']}")
     print()
 
+    seen_ids = load_seen_ids()
     try:
-        accepted, review, filtered, dup_count, pages_scraped = run_scrape(config, feedback)
+        accepted, review, filtered, dup_count, pages_scraped, network_error = run_scrape(config, feedback, seen_ids)
     except anthropic.AuthenticationError:
         sys.exit("Error: ANTHROPIC_API_KEY is missing or invalid. Set it with: export ANTHROPIC_API_KEY=...")
-    except requests.RequestException as exc:
-        sys.exit(f"Error: network request failed: {exc}")
+    save_seen_ids(seen_ids)
 
     accepted_path = f"output/eluta_{today}.xlsx"
     review_path = f"output/review_{today}.xlsx"
@@ -753,6 +814,10 @@ def main() -> None:
         write_review_xlsx(review, review_path)
     if filtered:
         write_filtered_json(filtered, filtered_path)
+
+    if network_error:
+        print(f"\nWarning: run ended early due to network error: {network_error}")
+        print("Partial results saved.")
 
     print_summary(accepted, review, filtered, dup_count, pages_scraped, accepted_path)
 

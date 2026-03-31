@@ -6,3 +6,6 @@ output/
 *.xlsx
 *.json.bak
 .env
+feedback.json
+seen_jobs.json
+.claude/

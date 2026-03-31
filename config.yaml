@@ -61,6 +61,7 @@ filters:
     - "team lead"
     - "principal engineer"
     - "engineering manager"
+    - "director"
   non_technical_blocklist:
     - millwright
     - electrician
@@ -83,3 +84,4 @@ scraper:
   delay_min: 2
   delay_max: 5
   respect_robots_txt: true
+  cutoff_days: 3  # stop scraping jobs older than this many days (set to 0 to disable)

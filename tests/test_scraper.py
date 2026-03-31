@@ -487,7 +487,7 @@ def _make_full_config():
             "claude_model": "claude-haiku-4-5-20251001",
             "max_few_shot_examples": 15,
         },
-        "scraper": {"delay_min": 0, "delay_max": 0, "respect_robots_txt": False},
+        "scraper": {"delay_min": 0, "delay_max": 0, "respect_robots_txt": False, "cutoff_days": 0},
     }
 
 
@@ -510,7 +510,7 @@ def test_pipeline_accepts_relevant_job():
         mock_page.side_effect = [page1_jobs, []]
         mock_jd.return_value = "3-5 years Python experience with Django and AWS."
 
-        accepted, review, filtered, _, _ = run_scrape(config, feedback)
+        accepted, review, filtered, _, _, _ = run_scrape(config, feedback)
 
     assert len(accepted) == 1
     assert accepted[0]["title"] == "Backend Developer"
@@ -536,7 +536,7 @@ def test_pipeline_filters_non_technical():
         mock_page.side_effect = [page1_jobs, []]
         mock_jd.return_value = ""
 
-        accepted, review, filtered, _, _ = run_scrape(config, feedback)
+        accepted, review, filtered, _, _, _ = run_scrape(config, feedback)
 
     assert len(accepted) == 0
     assert len(filtered) == 1
@@ -560,7 +560,7 @@ def test_pipeline_deduplicates_within_run():
         mock_page.side_effect = [[same_job], [same_job]]
         mock_jd.return_value = "2 years Python experience."
 
-        accepted, review, filtered, _, _ = run_scrape(config, feedback)
+        accepted, review, filtered, _, _, _ = run_scrape(config, feedback)
 
     assert len(accepted) == 1  # deduplicated
 
@@ -585,7 +585,7 @@ def test_pipeline_stops_at_max_pages():
         mock_page.return_value = infinite_page  # always returns results
         mock_jd.return_value = "2 years Python experience."
 
-        accepted, review, filtered, _, pages = run_scrape(config, feedback)
+        accepted, review, filtered, _, pages, _ = run_scrape(config, feedback)
 
     assert pages == 2  # stopped at max_pages, not from empty page
 
@@ -614,7 +614,7 @@ def test_pipeline_filters_feedback_rejected_title():
         mock_page.side_effect = [page1, []]
         mock_jd.return_value = "Some description."
 
-        accepted, review, filtered, _, _ = run_scrape(config, feedback)
+        accepted, review, filtered, _, _, _ = run_scrape(config, feedback)
 
     assert len(accepted) == 0
     assert any(j["title"] == "Backend Developer" for j in filtered)
@@ -646,7 +646,7 @@ def test_pipeline_routes_low_confidence_to_review():
         mock_jd.return_value = "Some technical description."
         mock_claude.return_value = mock_claude_result
 
-        accepted, review, filtered, _, _ = run_scrape(config, feedback)
+        accepted, review, filtered, _, _, _ = run_scrape(config, feedback)
 
     assert len(accepted) == 0
     assert len(review) == 1
@@ -673,9 +673,76 @@ def test_pipeline_pages_scraped_correct_on_early_empty_page():
         mock_page.side_effect = [page1_jobs, []]
         mock_jd.return_value = "2 years Python experience."
 
-        _, _, _, _, pages = run_scrape(config, feedback)
+        _, _, _, _, pages, _ = run_scrape(config, feedback)
 
     assert pages == 1  # only 1 page actually had results
+
+
+def test_parse_days_ago():
+    from scraper import _parse_days_ago
+    assert _parse_days_ago("today") == 0
+    assert _parse_days_ago("3 hours ago") == 0
+    assert _parse_days_ago("yesterday") == 1
+    assert _parse_days_ago("2 days ago") == 2
+    assert _parse_days_ago("1 week ago") == 7
+    assert _parse_days_ago("2 weeks ago") == 14
+    assert _parse_days_ago("") == 0
+
+
+def test_pipeline_stops_at_cutoff_days():
+    from scraper import run_scrape
+
+    config = _make_full_config()
+    config["scraper"]["cutoff_days"] = 2
+    feedback = {"decisions": [], "ambiguous_titles": []}
+
+    page1 = [
+        {"title": "Backend Developer", "company": "Acme", "snippet": "Python",
+         "date_posted": "1 day ago", "job_id": "aaa111", "slug": "spl/backend-aaa111?imo=1",
+         "url": "https://www.eluta.ca/spl/aaa111"},
+    ]
+    page2 = [
+        {"title": "Backend Developer", "company": "Corp", "snippet": "Python",
+         "date_posted": "5 days ago", "job_id": "bbb222", "slug": "spl/backend-bbb222?imo=1",
+         "url": "https://www.eluta.ca/spl/bbb222"},
+    ]
+
+    with patch("scraper.fetch_results_page") as mock_page, \
+         patch("scraper.fetch_full_jd") as mock_jd, \
+         patch("scraper._check_robots"), \
+         patch("scraper.load_seen_ids", return_value=set()), \
+         patch("scraper.save_seen_ids"):
+        mock_page.side_effect = [page1, page2]
+        mock_jd.return_value = "2 years Python."
+
+        accepted, _, _, _, pages, _ = run_scrape(config, feedback)
+
+    assert pages == 1  # stopped before processing page 2's old jobs
+    assert len(accepted) == 1  # only the 1-day-old job
+
+
+def test_pipeline_skips_seen_ids_across_runs():
+    from scraper import run_scrape
+
+    config = _make_full_config()
+    feedback = {"decisions": [], "ambiguous_titles": []}
+
+    page1 = [
+        {"title": "Backend Developer", "company": "Acme", "snippet": "Python",
+         "date_posted": "1 day ago", "job_id": "aaa111", "slug": "spl/backend-aaa111?imo=1",
+         "url": "https://www.eluta.ca/spl/aaa111"},
+    ]
+
+    with patch("scraper.fetch_results_page") as mock_page, \
+         patch("scraper.fetch_full_jd") as mock_jd, \
+         patch("scraper._check_robots"):
+        mock_page.side_effect = [page1, []]
+        mock_jd.return_value = "2 years Python."
+
+        accepted, _, _, duplicate_count, _, _ = run_scrape(config, feedback, seen_ids={"aaa111"})
+
+    assert len(accepted) == 0
+    assert duplicate_count == 1  # skipped as already seen
 
 
 # ---------------------------------------------------------------------------
@@ -910,7 +977,7 @@ def test_end_to_end_smoke(tmp_path):
         mock_jd.return_value = "3-5 years of Python, Django, REST API experience."
         MockClient.return_value.messages.create.return_value = mock_claude_response
 
-        accepted, review, filtered, _, _ = run_scrape(config, feedback)
+        accepted, review, filtered, _, _, _ = run_scrape(config, feedback)
 
     # Backend Developer: keyword match → accepted
     assert any(j["title"] == "Backend Developer" for j in accepted)
