@@ -874,7 +874,7 @@ def test_ingest_feedback_skips_json_without_dispute_flag(tmp_path):
 # TASK 15: End-to-End Smoke Test
 # ---------------------------------------------------------------------------
 
-def test_end_to_end_smoke(tmp_path, monkeypatch):
+def test_end_to_end_smoke(tmp_path):
     """
     Full pipeline smoke test with mocked HTTP and Claude.
     Verifies XLSX + JSON files are created and contain expected data.

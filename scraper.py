@@ -14,7 +14,7 @@ import yaml
 import requests
 from bs4 import BeautifulSoup
 import anthropic
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import PatternFill, Font, Alignment
 from openpyxl.utils import get_column_letter
 
@@ -610,7 +610,6 @@ def write_filtered_json(jobs: list[dict], filepath: str) -> None:
 
 def _ingest_from_review_xlsx(filepath: str, feedback: dict) -> dict:
     """Process a review XLSX file. Reads confirm/reason columns filled in by user."""
-    from openpyxl import load_workbook
     wb = load_workbook(filepath)
     ws = wb.active
 
@@ -646,6 +645,7 @@ def _ingest_from_dispute_json(filepath: str, feedback: dict) -> dict:
     with open(filepath) as f:
         jobs = json.load(f)
 
+    existing_lower = {t.lower() for t in feedback["ambiguous_titles"]}
     for job in jobs:
         if not job.get("dispute"):
             continue
@@ -654,8 +654,9 @@ def _ingest_from_dispute_json(filepath: str, feedback: dict) -> dict:
 
         # Add to ambiguous list (bypasses hard filter next run → goes to Claude)
         title_lower = title.lower().strip()
-        if title_lower not in [t.lower() for t in feedback["ambiguous_titles"]]:
+        if title_lower not in existing_lower:
             feedback["ambiguous_titles"].append(title_lower)
+            existing_lower.add(title_lower)
 
         # Add as positive few-shot example for Claude
         feedback["decisions"].append({
@@ -738,7 +739,12 @@ def main() -> None:
     print(f"Max pages: {config['sites']['eluta']['max_pages']}")
     print()
 
-    accepted, review, filtered, dup_count, pages_scraped = run_scrape(config, feedback)
+    try:
+        accepted, review, filtered, dup_count, pages_scraped = run_scrape(config, feedback)
+    except anthropic.AuthenticationError:
+        sys.exit("Error: ANTHROPIC_API_KEY is missing or invalid. Set it with: export ANTHROPIC_API_KEY=...")
+    except requests.RequestException as exc:
+        sys.exit(f"Error: network request failed: {exc}")
 
     accepted_path = f"output/eluta_{today}.xlsx"
     review_path = f"output/review_{today}.xlsx"
