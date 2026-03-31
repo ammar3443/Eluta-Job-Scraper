@@ -403,12 +403,11 @@ SAMPLE_SPL_HTML = """
 def test_fetch_results_page_returns_jobs():
     from scraper import fetch_results_page
     config = {"scraper": {"delay_min": 0, "delay_max": 0, "respect_robots_txt": False}}
-    with patch("scraper.requests.get") as mock_get:
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.text = SAMPLE_RESULTS_HTML
-        mock_get.return_value = mock_resp
-        jobs = fetch_results_page(1, "software engineer", config)
+    pw_page = MagicMock()
+    pw_page.goto.return_value = MagicMock(status=200)
+    pw_page.content.return_value = SAMPLE_RESULTS_HTML
+    pw_page.url = "https://www.eluta.ca/search?q=software+engineer"
+    jobs = fetch_results_page(1, "software engineer", config, pw_page)
     assert len(jobs) == 2
     assert jobs[0]["title"] == "Backend Developer"
     assert jobs[0]["company"] == "Acme Corp"
@@ -420,12 +419,11 @@ def test_fetch_results_page_returns_jobs():
 def test_fetch_results_page_empty_returns_empty_list():
     from scraper import fetch_results_page
     config = {"scraper": {"delay_min": 0, "delay_max": 0, "respect_robots_txt": False}}
-    with patch("scraper.requests.get") as mock_get:
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.text = "<html><body></body></html>"
-        mock_get.return_value = mock_resp
-        jobs = fetch_results_page(1, "software engineer", config)
+    pw_page = MagicMock()
+    pw_page.goto.return_value = MagicMock(status=200)
+    pw_page.content.return_value = "<html><body></body></html>"
+    pw_page.url = "https://www.eluta.ca/search?q=software+engineer"
+    jobs = fetch_results_page(1, "software engineer", config, pw_page)
     assert jobs == []
 
 
@@ -456,15 +454,13 @@ def test_fetch_full_jd_returns_empty_on_parse_failure():
 
 
 def test_fetch_results_page_raises_on_http_error():
-    import requests as req_lib
     from scraper import fetch_results_page
+    from playwright.sync_api import Error as PlaywrightError
     config = {"scraper": {"delay_min": 0, "delay_max": 0, "respect_robots_txt": False}}
-    with patch("scraper.requests.get") as mock_get:
-        mock_resp = MagicMock()
-        mock_resp.raise_for_status.side_effect = req_lib.HTTPError("403 Forbidden")
-        mock_get.return_value = mock_resp
-        with pytest.raises(req_lib.HTTPError):
-            fetch_results_page(1, "software engineer", config)
+    pw_page = MagicMock()
+    pw_page.goto.side_effect = PlaywrightError("net::ERR_CONNECTION_REFUSED")
+    with pytest.raises(PlaywrightError):
+        fetch_results_page(1, "software engineer", config, pw_page)
 
 
 # ---------------------------------------------------------------------------

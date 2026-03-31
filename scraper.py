@@ -11,6 +11,7 @@ from datetime import date
 from difflib import SequenceMatcher
 from pathlib import Path
 from urllib.robotparser import RobotFileParser
+from urllib.parse import urlencode
 
 import yaml
 import requests
@@ -369,19 +370,20 @@ def _extract_job_id(slug: str) -> str:
     return match.group(1) if match else slug.split("?")[0]
 
 
-def fetch_results_page(page: int, query: str, config: dict) -> list[dict]:
+def fetch_results_page(page_num: int, query: str, config: dict, pw_page) -> list[dict]:
     """
     Fetch one search results page from Eluta.
     Returns list of job dicts: {title, company, snippet, date_posted, job_id, slug, url}
     """
     # Eluta uses "pg" for pagination; page 1 has no pg parameter, pages 2+ use pg=N
     params = {"q": query}
-    if page > 1:
-        params["pg"] = page
+    if page_num > 1:
+        params["pg"] = page_num
+    url = f"{ELUTA_SEARCH}?{urlencode(params)}"
     _polite_delay(config)
-    resp = requests.get(ELUTA_SEARCH, params=params, headers=HEADERS, timeout=30)
-    resp.raise_for_status()  # surface 403/429/5xx immediately instead of silently parsing error HTML
-    soup = BeautifulSoup(resp.text, "html.parser")
+    pw_page.goto(url, wait_until="domcontentloaded", timeout=30000)
+    html = pw_page.content()
+    soup = BeautifulSoup(html, "html.parser")
 
     jobs = []
     for card in soup.find_all(class_="organic-job"):
@@ -406,13 +408,13 @@ def fetch_results_page(page: int, query: str, config: dict) -> list[dict]:
         })
 
     if not jobs:
-        print(f"  [debug] Page {page} returned no jobs. URL: {resp.url}")
-        print(f"  [debug] Response snippet: {resp.text[:500]}")
+        print(f"  [debug] Page {page_num} returned no jobs. URL: {pw_page.url}")
+        print(f"  [debug] Response snippet: {html[:500]}")
 
     return jobs
 
 
-def fetch_full_jd(slug: str, config: dict) -> str:
+def fetch_full_jd(slug: str, config: dict, session: requests.Session | None = None) -> str:
     """
     Fetch the full job description from the /spl/ page.
     Returns plain text of the description, or empty string on failure.
@@ -420,7 +422,8 @@ def fetch_full_jd(slug: str, config: dict) -> str:
     # slug may be "spl/job-title-hash?imo=N" — build full URL
     url = f"{ELUTA_BASE}/{slug}" if not slug.startswith("http") else slug
     _polite_delay(config)
-    resp = requests.get(url, headers=HEADERS, timeout=30)
+    requester = session or requests
+    resp = requester.get(url, headers=HEADERS, timeout=30)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
 
@@ -515,10 +518,11 @@ def run_scrape(config: dict, feedback: dict, seen_ids: set[str] | None = None) -
     ambiguous_titles = {t.lower() for t in feedback.get("ambiguous_titles", [])}
 
     network_error: str | None = None
+    session = requests.Session()
 
     for page in range(1, max_pages + 1):
         try:
-            page_jobs = fetch_results_page(page, query, config)
+            page_jobs = fetch_results_page(page, query, config, session)
         except requests.RequestException as exc:
             network_error = str(exc)
             print(f"\n  Network error on page {page}: {exc}")
@@ -556,7 +560,7 @@ def run_scrape(config: dict, feedback: dict, seen_ids: set[str] | None = None) -
 
             # Fetch full JD for all non-filtered jobs
             try:
-                jd_text = fetch_full_jd(job["slug"], config)
+                jd_text = fetch_full_jd(job["slug"], config, session)
             except requests.RequestException as exc:
                 print(f"\n  Network error fetching JD for '{job['title']}': {exc} — skipping job.")
                 continue
