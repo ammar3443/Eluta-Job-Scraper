@@ -588,3 +588,17 @@ def write_review_xlsx(jobs: list[dict], filepath: str) -> None:
         _write_job_row(ws, i, job, _REVIEW_COLUMNS)
         # Leave confirm and reason blank for user to fill
     wb.save(filepath)
+
+
+# ---------------------------------------------------------------------------
+# Filtered JSON Export
+# ---------------------------------------------------------------------------
+
+_FILTERED_FIELDS = ["job_id", "title", "company", "date_posted", "snippet",
+                    "filter_reason", "url"]
+
+
+def write_filtered_json(jobs: list[dict], filepath: str) -> None:
+    records = [{k: job.get(k, "") for k in _FILTERED_FIELDS} for job in jobs]
+    with open(filepath, "w") as f:
+        json.dump(records, f, indent=2)

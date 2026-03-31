@@ -759,3 +759,36 @@ def test_write_accepted_xlsx_rows_are_color_coded(tmp_path):
     row3_color = ws.cell(3, title_col).fill.fgColor.rgb  # ai_ml row
     assert row2_color.endswith(CATEGORY_COLORS["backend"])
     assert row3_color.endswith(CATEGORY_COLORS["ai_ml"])
+
+
+# ---------------------------------------------------------------------------
+# TASK 12: Filtered JSON Exporter Tests
+# ---------------------------------------------------------------------------
+
+def test_write_filtered_json_creates_file(tmp_path):
+    from scraper import write_filtered_json
+    jobs = [
+        {"job_id": "abc123", "title": "Civil Engineer", "company": "Build Co",
+         "date_posted": "1 day ago", "snippet": "Bridges and roads.",
+         "filter_reason": "non-technical blocklist match: 'civil engineer'",
+         "url": "https://www.eluta.ca/spl/abc123"},
+    ]
+    out = tmp_path / "filtered.json"
+    write_filtered_json(jobs, str(out))
+    assert out.exists()
+
+
+def test_write_filtered_json_correct_structure(tmp_path):
+    from scraper import write_filtered_json
+    jobs = [
+        {"job_id": "abc123", "title": "Civil Engineer", "company": "Build Co",
+         "date_posted": "1 day ago", "snippet": "Bridges.",
+         "filter_reason": "non-technical blocklist match: 'civil engineer'",
+         "url": "https://www.eluta.ca/spl/abc123"},
+    ]
+    out = tmp_path / "filtered.json"
+    write_filtered_json(jobs, str(out))
+    data = json.loads(out.read_text())
+    assert isinstance(data, list)
+    assert data[0]["title"] == "Civil Engineer"
+    assert "filter_reason" in data[0]
