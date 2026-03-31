@@ -14,7 +14,6 @@ from urllib.robotparser import RobotFileParser
 from urllib.parse import urlencode
 
 import yaml
-import requests
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright, Error as PlaywrightError
 import anthropic
@@ -519,8 +518,15 @@ def run_scrape(config: dict, feedback: dict, seen_ids: set[str] | None = None) -
     network_error: str | None = None
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(user_agent=HEADERS["User-Agent"])
+        browser = p.chromium.launch(
+            headless=True,
+            args=["--disable-blink-features=AutomationControlled"],
+        )
+        context = browser.new_context(
+            user_agent=HEADERS["User-Agent"],
+            extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
+        )
+        context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         pw_page = context.new_page()
 
         for page in range(1, max_pages + 1):
