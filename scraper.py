@@ -561,13 +561,12 @@ def _write_job_row(ws, row_idx: int, job: dict, columns: list[str]) -> None:
             cell.hyperlink = value
             cell.value = value
             cell.font = Font(color="0563C1", underline="single")
-        elif col_name == "confidence" and value is not None:
-            cell.value = f"{value:.0%}" if isinstance(value, float) else ""
+        elif col_name == "confidence":
+            cell.value = f"{value:.0%}" if isinstance(value, (int, float)) else ""
         else:
             cell.value = value if value is not None else ""
 
-        if col_name != "url":
-            cell.fill = row_fill
+        cell.fill = row_fill
 
 
 def write_accepted_xlsx(jobs: list[dict], filepath: str) -> None:

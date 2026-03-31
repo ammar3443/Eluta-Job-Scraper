@@ -3,6 +3,7 @@ import json
 import os
 import pytest
 import yaml
+from openpyxl import load_workbook
 from unittest.mock import MagicMock, mock_open, patch
 
 
@@ -681,9 +682,6 @@ def test_pipeline_pages_scraped_correct_on_early_empty_page():
 # TASK 11: XLSX Exporter Tests
 # ---------------------------------------------------------------------------
 
-from openpyxl import load_workbook
-
-
 def _make_accepted_jobs():
     return [
         {
@@ -748,3 +746,16 @@ def test_write_accepted_xlsx_url_is_hyperlink(tmp_path):
     ws = wb.active
     url_col = _ACCEPTED_COLUMNS.index("url") + 1  # 1-based
     assert ws.cell(2, url_col).hyperlink is not None
+
+
+def test_write_accepted_xlsx_rows_are_color_coded(tmp_path):
+    from scraper import write_accepted_xlsx, _ACCEPTED_COLUMNS, CATEGORY_COLORS
+    out = tmp_path / "jobs.xlsx"
+    write_accepted_xlsx(_make_accepted_jobs(), str(out))
+    wb = load_workbook(str(out))
+    ws = wb.active
+    title_col = _ACCEPTED_COLUMNS.index("title") + 1
+    row2_color = ws.cell(2, title_col).fill.fgColor.rgb  # backend row
+    row3_color = ws.cell(3, title_col).fill.fgColor.rgb  # ai_ml row
+    assert row2_color.endswith(CATEGORY_COLORS["backend"])
+    assert row3_color.endswith(CATEGORY_COLORS["ai_ml"])
