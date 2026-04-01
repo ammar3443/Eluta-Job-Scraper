@@ -433,10 +433,10 @@ def test_fetch_full_jd_returns_text():
     pw_page = MagicMock()
     pw_page.goto.return_value = MagicMock(status=200)
     pw_page.content.return_value = SAMPLE_SPL_HTML
-    text = fetch_full_jd("spl/backend-developer-abc123def456?imo=1", config, pw_page)
-    assert "Python" in text
-    assert "Django" in text
-    assert "3-5 years" in text
+    jd_text, apply_url = fetch_full_jd("spl/backend-developer-abc123def456?imo=1", config, pw_page)
+    assert "Python" in jd_text
+    assert "Django" in jd_text
+    assert "3-5 years" in jd_text
 
 
 def test_fetch_full_jd_returns_empty_on_parse_failure():
@@ -445,8 +445,8 @@ def test_fetch_full_jd_returns_empty_on_parse_failure():
     pw_page = MagicMock()
     pw_page.goto.return_value = MagicMock(status=200)
     pw_page.content.return_value = "<html><body><p>No description here.</p></body></html>"
-    text = fetch_full_jd("spl/some-job?imo=1", config, pw_page)
-    assert text == ""
+    jd_text, apply_url = fetch_full_jd("spl/some-job?imo=1", config, pw_page)
+    assert jd_text == ""
 
 
 def test_fetch_results_page_raises_on_http_error():
@@ -501,7 +501,7 @@ def test_pipeline_accepts_relevant_job():
          patch("scraper.sync_playwright"):
         # Page 1 has 1 job, page 2 is empty → stops
         mock_page.side_effect = [page1_jobs, []]
-        mock_jd.return_value = "3-5 years Python experience with Django and AWS."
+        mock_jd.return_value = ("3-5 years Python experience with Django and AWS.", "https://example.com/job")
 
         accepted, review, filtered, _, _, _ = run_scrape(config, feedback)
 
@@ -528,7 +528,7 @@ def test_pipeline_filters_non_technical():
          patch("scraper._check_robots"), \
          patch("scraper.sync_playwright"):
         mock_page.side_effect = [page1_jobs, []]
-        mock_jd.return_value = ""
+        mock_jd.return_value = ("", "https://example.com/job")
 
         accepted, review, filtered, _, _, _ = run_scrape(config, feedback)
 
@@ -553,7 +553,7 @@ def test_pipeline_deduplicates_within_run():
          patch("scraper.sync_playwright"):
         # Same job appears on page 1 and page 2
         mock_page.side_effect = [[same_job], [same_job]]
-        mock_jd.return_value = "2 years Python experience."
+        mock_jd.return_value = ("2 years Python experience.", "https://example.com/job")
 
         accepted, review, filtered, _, _, _ = run_scrape(config, feedback)
 
@@ -579,7 +579,7 @@ def test_pipeline_stops_at_max_pages():
          patch("scraper._check_robots"), \
          patch("scraper.sync_playwright"):
         mock_page.return_value = infinite_page  # always returns results
-        mock_jd.return_value = "2 years Python experience."
+        mock_jd.return_value = ("2 years Python experience.", "https://example.com/job")
 
         accepted, review, filtered, _, pages, _ = run_scrape(config, feedback)
 
@@ -609,7 +609,7 @@ def test_pipeline_filters_feedback_rejected_title():
          patch("scraper._check_robots"), \
          patch("scraper.sync_playwright"):
         mock_page.side_effect = [page1, []]
-        mock_jd.return_value = "Some description."
+        mock_jd.return_value = ("Some description.", "https://example.com/job")
 
         accepted, review, filtered, _, _, _ = run_scrape(config, feedback)
 
@@ -641,7 +641,7 @@ def test_pipeline_routes_low_confidence_to_review():
          patch("scraper._check_robots"), \
          patch("scraper.sync_playwright"):
         mock_page.side_effect = [page1_jobs, []]
-        mock_jd.return_value = "Some technical description."
+        mock_jd.return_value = ("Some technical description.", "https://example.com/job")
         mock_claude.return_value = mock_claude_result
 
         accepted, review, filtered, _, _, _ = run_scrape(config, feedback)
@@ -670,7 +670,7 @@ def test_pipeline_pages_scraped_correct_on_early_empty_page():
          patch("scraper.sync_playwright"):
         # Page 1 has jobs, page 2 is empty → stops after 1 page
         mock_page.side_effect = [page1_jobs, []]
-        mock_jd.return_value = "2 years Python experience."
+        mock_jd.return_value = ("2 years Python experience.", "https://example.com/job")
 
         _, _, _, _, pages, _ = run_scrape(config, feedback)
 
@@ -713,7 +713,7 @@ def test_pipeline_stops_at_cutoff_days():
          patch("scraper.save_seen_ids"), \
          patch("scraper.sync_playwright"):
         mock_page.side_effect = [page1, page2]
-        mock_jd.return_value = "2 years Python."
+        mock_jd.return_value = ("2 years Python.", "https://example.com/job")
 
         accepted, _, _, _, pages, _ = run_scrape(config, feedback)
 
@@ -738,7 +738,7 @@ def test_pipeline_skips_seen_ids_across_runs():
          patch("scraper._check_robots"), \
          patch("scraper.sync_playwright"):
         mock_page.side_effect = [page1, []]
-        mock_jd.return_value = "2 years Python."
+        mock_jd.return_value = ("2 years Python.", "https://example.com/job")
 
         accepted, _, _, duplicate_count, _, _ = run_scrape(config, feedback, seen_ids={"aaa111"})
 
@@ -976,7 +976,7 @@ def test_end_to_end_smoke(tmp_path):
          patch("scraper.sync_playwright"):
 
         mock_page.side_effect = [page1, []]
-        mock_jd.return_value = "3-5 years of Python, Django, REST API experience."
+        mock_jd.return_value = ("3-5 years of Python, Django, REST API experience.", "https://example.com/job")
         MockClient.return_value.messages.create.return_value = mock_claude_response
 
         accepted, review, filtered, _, _, _ = run_scrape(config, feedback)

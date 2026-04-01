@@ -364,12 +364,42 @@ def _check_robots(config: dict) -> bool:
     return True
 
 
-def _polite_delay(config: dict) -> None:
-    delay = random.uniform(
-        config["scraper"]["delay_min"],
-        config["scraper"]["delay_max"],
-    )
+def _polite_delay(config: dict, headless: bool = True) -> None:
+    if headless:
+        # Automated runs: use configured delays (10-20s)
+        delay = random.uniform(
+            config["scraper"]["delay_min"],
+            config["scraper"]["delay_max"],
+        )
+    else:
+        # Interactive runs: shorter delays (2-5s)
+        delay = random.uniform(2, 5)
     time.sleep(delay)
+
+
+def _has_captcha(html: str) -> bool:
+    """Check if page is showing reCAPTCHA or sandbox redirect."""
+    html_lower = html.lower()
+    return "recaptcha" in html_lower or "sandbox" in html_lower or "challenge" in html_lower
+
+
+def _alert_captcha() -> None:
+    """Play sound + show desktop notification for CAPTCHA."""
+    try:
+        subprocess.run(["paplay", "/usr/share/sounds/freedesktop/stereo/complete.oga"], timeout=2)
+    except Exception:
+        pass
+
+    try:
+        subprocess.run([
+            "notify-send",
+            "JobScraper",
+            "CAPTCHA detected — please solve in browser",
+            "-u", "critical",
+            "-t", "0"
+        ], timeout=2)
+    except Exception:
+        pass
 
 
 def _extract_job_id(slug: str) -> str:
@@ -398,7 +428,7 @@ def _launch_playwright_page(headless: bool = True):
     return p, browser, context, context.new_page()
 
 
-def fetch_results_page(page_num: int, query: str, config: dict, pw_page) -> list[dict]:
+def fetch_results_page(page_num: int, query: str, config: dict, pw_page, headless: bool = True) -> list[dict]:
     """
     Fetch one search results page from Eluta.
     Returns list of job dicts: {title, company, snippet, date_posted, job_id, slug, url}
@@ -409,9 +439,19 @@ def fetch_results_page(page_num: int, query: str, config: dict, pw_page) -> list
     if page_num > 1:
         params["pg"] = page_num
     url = f"{ELUTA_SEARCH}?{urlencode(params)}"
-    _polite_delay(config)
+    _polite_delay(config, headless)
     pw_page.goto(url, wait_until="domcontentloaded", timeout=PLAYWRIGHT_TIMEOUT_MS)
     html = pw_page.content()
+
+    if _has_captcha(html):
+        print("\n⚠️  CAPTCHA detected! Waiting for manual solve...")
+        _alert_captcha()
+        # Wait for user to solve CAPTCHA manually
+        time.sleep(5)
+        # Reload page to check if CAPTCHA was solved
+        pw_page.reload(wait_until="domcontentloaded")
+        html = pw_page.content()
+
     soup = BeautifulSoup(html, "html.parser")
 
     jobs = []
@@ -443,24 +483,46 @@ def fetch_results_page(page_num: int, query: str, config: dict, pw_page) -> list
     return jobs
 
 
-def fetch_full_jd(slug: str, config: dict, pw_page) -> str:
+def fetch_full_jd(slug: str, config: dict, pw_page, headless: bool = True) -> tuple[str, str]:
     """
     Fetch the full job description from the /spl/ page.
-    Returns plain text of the description, or empty string on failure.
+    Returns tuple of (jd_text, apply_url).
+    jd_text: plain text of the description, or empty string on failure.
+    apply_url: URL from the "Apply Now" button, or original Eluta URL fallback.
     """
-    url = f"{ELUTA_BASE}/{slug}" if not slug.startswith("http") else slug
-    _polite_delay(config)
-    pw_page.goto(url, wait_until="domcontentloaded", timeout=PLAYWRIGHT_TIMEOUT_MS)
+    eluta_url = f"{ELUTA_BASE}/{slug}" if not slug.startswith("http") else slug
+    _polite_delay(config, headless)
+    pw_page.goto(eluta_url, wait_until="domcontentloaded", timeout=PLAYWRIGHT_TIMEOUT_MS)
     html = pw_page.content()
+
+    if _has_captcha(html):
+        print("\n⚠️  CAPTCHA detected! Waiting for manual solve...")
+        _alert_captcha()
+        # Wait for user to solve CAPTCHA manually
+        time.sleep(5)
+        # Reload page to check if CAPTCHA was solved
+        pw_page.reload(wait_until="domcontentloaded")
+        html = pw_page.content()
+
     soup = BeautifulSoup(html, "html.parser")
 
+    # Extract job description
     desc = soup.find(class_="short-text")
     if not desc:
         # Fallback: try description div
         desc = soup.find("div", class_="description")
-    if not desc:
-        return ""
-    return desc.get_text(separator=" ", strip=True)
+    jd_text = desc.get_text(separator=" ", strip=True) if desc else ""
+
+    # Extract apply URL from "Apply Now" button or similar
+    apply_url = eluta_url  # Default fallback to Eluta URL
+    apply_button = soup.find("a", class_="btn-apply") or soup.find("a", string="Apply Now") or soup.find("a", string="Apply")
+    if apply_button and apply_button.get("href"):
+        apply_url = apply_button.get("href")
+        # Handle relative URLs
+        if not apply_url.startswith("http"):
+            apply_url = apply_url if apply_url.startswith("/") else f"/{apply_url}"
+
+    return jd_text, apply_url
 
 
 # ---------------------------------------------------------------------------
@@ -516,7 +578,7 @@ def classify_job(job: dict, jd_text: str, feedback: dict, config: dict, is_ambig
 
 
 def _process_job(job: dict, config: dict, feedback: dict, seen_ids: set[str],
-                 ambiguous_titles: set, pw_page, accepted: list, review: list, filtered: list) -> tuple[int, str | None]:
+                 ambiguous_titles: set, pw_page, accepted: list, review: list, filtered: list, headless: bool = True) -> tuple[int, str | None]:
     """
     Process a single job through the classification pipeline.
     Returns (duplicate_count, network_error).
@@ -534,10 +596,13 @@ def _process_job(job: dict, config: dict, feedback: dict, seen_ids: set[str],
 
     # Fetch full JD for all non-filtered jobs
     try:
-        jd_text = fetch_full_jd(job["slug"], config, pw_page)
+        jd_text, apply_url = fetch_full_jd(job["slug"], config, pw_page, headless)
     except PlaywrightError as exc:
         print(f"\n  Network error fetching JD for '{job['title']}': {exc} — skipping job.")
         return 0, None
+
+    # Update job URL to actual posting URL (not Eluta wrapper)
+    job["url"] = apply_url
 
     classified = classify_job(job, jd_text, feedback, config, is_ambiguous=(action == "ambiguous"))
 
@@ -602,7 +667,7 @@ def run_scrape(config: dict, feedback: dict, seen_ids: set[str] | None = None, h
 
         for page in range(1, max_pages + 1):
             try:
-                page_jobs = fetch_results_page(page, query, config, pw_page)
+                page_jobs = fetch_results_page(page, query, config, pw_page, headless)
             except PlaywrightError as exc:
                 network_error = str(exc)
                 print(f"\n  Network error on page {page}: {exc}")
@@ -626,7 +691,7 @@ def run_scrape(config: dict, feedback: dict, seen_ids: set[str] | None = None, h
             print(f"\r  Page {pages_scraped}...", end="", flush=True)
 
             for job in page_jobs:
-                dup_count, err = _process_job(job, config, feedback, seen_ids, ambiguous_titles, pw_page, accepted, review, filtered)
+                dup_count, err = _process_job(job, config, feedback, seen_ids, ambiguous_titles, pw_page, accepted, review, filtered, headless)
                 duplicate_count += dup_count
                 if err:
                     network_error = err
