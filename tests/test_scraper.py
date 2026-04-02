@@ -680,7 +680,8 @@ def test_pipeline_pages_scraped_correct_on_early_empty_page():
 def test_parse_days_ago():
     from scraper import _parse_days_ago
     assert _parse_days_ago("today") == 0
-    assert _parse_days_ago("3 hours ago") == 0
+    assert _parse_days_ago("3 hours ago") == pytest.approx(3 / 24)
+    assert _parse_days_ago("12 hours ago") == pytest.approx(12 / 24)
     assert _parse_days_ago("yesterday") == 1
     assert _parse_days_ago("2 days ago") == 2
     assert _parse_days_ago("1 week ago") == 7

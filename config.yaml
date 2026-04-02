@@ -1,7 +1,6 @@
 sites:
   eluta:
     enabled: true
-    query: "software engineer"
     max_pages: 100
 
 categories:

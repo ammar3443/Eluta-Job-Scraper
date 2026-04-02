@@ -98,23 +98,26 @@ def save_seen_ids(seen_ids: set[str], path: str = "seen_jobs.json") -> None:
         json.dump(list(seen_ids), f)
 
 
-def _parse_days_ago(date_str: str) -> int:
-    """Parse Eluta's relative date string to approximate number of days ago."""
+def _parse_days_ago(date_str: str) -> float:
+    """Parse Eluta's relative date string to approximate number of days ago (fractional)."""
     s = date_str.lower().strip()
-    if not s or "today" in s or "hour" in s or "minute" in s or "just" in s:
-        return 0
+    if not s or "today" in s or "minute" in s or "just" in s:
+        return 0.0
+    m = re.search(r"(\d+)\s*hour", s)
+    if m:
+        return int(m.group(1)) / 24
     if "yesterday" in s:
-        return 1
+        return 1.0
     m = re.search(r"(\d+)\s*day", s)
     if m:
-        return int(m.group(1))
+        return float(m.group(1))
     m = re.search(r"(\d+)\s*week", s)
     if m:
-        return int(m.group(1)) * 7
+        return float(int(m.group(1)) * 7)
     m = re.search(r"(\d+)\s*month", s)
     if m:
-        return int(m.group(1)) * 30
-    return 0  # unknown format — don't skip
+        return float(int(m.group(1)) * 30)
+    return 0.0  # unknown format — don't skip
 
 
 # ---------------------------------------------------------------------------
@@ -632,7 +635,9 @@ def _process_job(job: dict, config: dict, feedback: dict, seen_ids: set[str],
     return 0, None
 
 
-def run_scrape(config: dict, feedback: dict, seen_ids: set[str] | None = None, headless: bool = True) -> tuple[list, list, list, int, int, str | None]:
+def run_scrape(config: dict, feedback: dict, seen_ids: set[str] | None = None, headless: bool = True,
+               query: str = "", max_pages_override: int | None = None,
+               cutoff_days_override: float | None = None) -> tuple[list, list, list, int, int, str | None]:
     """
     Main scrape loop. Returns (accepted, review, filtered, duplicate_count, pages_scraped).
     - accepted: classified jobs above confidence threshold
@@ -643,13 +648,15 @@ def run_scrape(config: dict, feedback: dict, seen_ids: set[str] | None = None, h
 
     seen_ids: set of job IDs already processed in previous runs (passed in from main).
     headless: if False, launches visible browser for manual CAPTCHA solving.
+    query: search term to use on Eluta.
+    max_pages_override: overrides config's max_pages for this run.
+    cutoff_days_override: overrides config's cutoff_days for this run (fractional days supported).
     """
     _check_robots(config)
 
     eluta_cfg = config["sites"]["eluta"]
-    query = eluta_cfg["query"]
-    max_pages = eluta_cfg["max_pages"]
-    cutoff_days = config["scraper"].get("cutoff_days", 3)
+    max_pages = max_pages_override if max_pages_override is not None else eluta_cfg["max_pages"]
+    cutoff_days = cutoff_days_override if cutoff_days_override is not None else config["scraper"].get("cutoff_days", 3)
 
     if seen_ids is None:
         seen_ids = set()
@@ -698,7 +705,11 @@ def run_scrape(config: dict, feedback: dict, seen_ids: set[str] | None = None, h
                 page_jobs = [j for j in page_jobs
                              if _parse_days_ago(j.get("date_posted", "")) <= cutoff_days]
                 if not page_jobs:
-                    print(f"\n  Reached {cutoff_days}-day cutoff at page {page}, stopping.")
+                    if cutoff_days < 1:
+                        cutoff_label = f"{cutoff_days * 24:.0f}-hour"
+                    else:
+                        cutoff_label = f"{cutoff_days:.0f}-day"
+                    print(f"\n  Reached {cutoff_label} cutoff at page {page}, stopping.")
                     break
 
             pages_scraped += 1
@@ -776,11 +787,16 @@ def _write_job_row(ws, row_idx: int, job: dict, columns: list[str]) -> None:
 
 
 def _load_or_create_workbook(filepath: str, columns: list[str], sheet_name: str) -> tuple:
-    """Load existing workbook or create new one with formatting."""
+    """Load existing workbook or create new one with formatting. Finds or creates the named sheet."""
     if os.path.exists(filepath):
         wb = load_workbook(filepath)
-        ws = wb.active
-        next_row = ws.max_row + 1
+        if sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+            next_row = ws.max_row + 1
+        else:
+            ws = wb.create_sheet(sheet_name)
+            _apply_xlsx_formatting(ws, columns)
+            next_row = 2
     else:
         wb = Workbook()
         ws = wb.active
@@ -790,15 +806,15 @@ def _load_or_create_workbook(filepath: str, columns: list[str], sheet_name: str)
     return wb, ws, next_row
 
 
-def write_accepted_xlsx(jobs: list[dict], filepath: str) -> None:
-    wb, ws, next_row = _load_or_create_workbook(filepath, _ACCEPTED_COLUMNS, "Jobs")
+def write_accepted_xlsx(jobs: list[dict], filepath: str, sheet_name: str = "Jobs") -> None:
+    wb, ws, next_row = _load_or_create_workbook(filepath, _ACCEPTED_COLUMNS, sheet_name)
     for i, job in enumerate(jobs, start=next_row):
         _write_job_row(ws, i, job, _ACCEPTED_COLUMNS)
     wb.save(filepath)
 
 
-def write_review_xlsx(jobs: list[dict], filepath: str) -> None:
-    wb, ws, next_row = _load_or_create_workbook(filepath, _REVIEW_COLUMNS, "Review")
+def write_review_xlsx(jobs: list[dict], filepath: str, sheet_name: str = "Review") -> None:
+    wb, ws, next_row = _load_or_create_workbook(filepath, _REVIEW_COLUMNS, sheet_name)
     for i, job in enumerate(jobs, start=next_row):
         _write_job_row(ws, i, job, _REVIEW_COLUMNS)
         # Leave confirm and reason blank for user to fill
@@ -828,33 +844,32 @@ def write_filtered_json(jobs: list[dict], filepath: str) -> None:
 # ---------------------------------------------------------------------------
 
 def _ingest_from_review_xlsx(filepath: str, feedback: dict) -> dict:
-    """Process a review XLSX file. Reads confirm/reason columns filled in by user."""
+    """Process a review XLSX file. Reads confirm/reason columns from all sheets."""
     wb = load_workbook(filepath)
-    ws = wb.active
-
-    # Find column indices from header row
-    headers = {ws.cell(1, c).value: c for c in range(1, ws.max_column + 1)}
     required = {"title", "category", "confirm", "reason"}
-    if not required.issubset(headers.keys()):
-        print(f"Warning: review file missing columns {required - set(headers.keys())}")
-        return feedback
 
-    for row in range(2, ws.max_row + 1):
-        confirm_val = ws.cell(row, headers["confirm"]).value
-        if not confirm_val:
-            continue  # User left this row blank — skip
-        title = ws.cell(row, headers["title"]).value or ""
-        category = ws.cell(row, headers["category"]).value or "general_swe"
-        reason = ws.cell(row, headers["reason"]).value or ""
-        confirmed = str(confirm_val).strip().lower() in ("yes", "y", "true", "1")
+    for ws in wb.worksheets:
+        headers = {ws.cell(1, c).value: c for c in range(1, ws.max_column + 1)}
+        if not required.issubset(headers.keys()):
+            print(f"Warning: sheet '{ws.title}' missing columns {required - set(headers.keys())} — skipping")
+            continue
 
-        feedback["decisions"].append({
-            "title": title,
-            "relevant": confirmed,
-            "category": category if confirmed else None,
-            "reason": reason,
-            "source": "review",
-        })
+        for row in range(2, ws.max_row + 1):
+            confirm_val = ws.cell(row, headers["confirm"]).value
+            if not confirm_val:
+                continue  # User left this row blank — skip
+            title = ws.cell(row, headers["title"]).value or ""
+            category = ws.cell(row, headers["category"]).value or "general_swe"
+            reason = ws.cell(row, headers["reason"]).value or ""
+            confirmed = str(confirm_val).strip().lower() in ("yes", "y", "true", "1")
+
+            feedback["decisions"].append({
+                "title": title,
+                "relevant": confirmed,
+                "category": category if confirmed else None,
+                "reason": reason,
+                "source": "review",
+            })
 
     return feedback
 
@@ -940,13 +955,15 @@ def _venv_python() -> str:
     return str(Path(_project_dir()) / "venv" / "bin" / "python")
 
 
-def _cron_entry(interval_hours: int) -> str:
+def _cron_entry(interval_hours: int, searches: list[str]) -> str:
+    import shlex
     project = _project_dir()
     python = _venv_python()
     log = str(Path(project) / "logs" / "scraper.log")
+    search_args = " ".join(shlex.quote(s) for s in searches)
     return (
         f"0 */{interval_hours} * * * "
-        f"cd {project} && {python} scraper.py "
+        f"cd {project} && {python} scraper.py {search_args} "
         f">> {log} 2>&1 {CRON_MARKER}"
     )
 
@@ -963,15 +980,16 @@ def _write_crontab(content: str) -> None:
     subprocess.run(["crontab", "-"], input=content, text=True, check=True)
 
 
-def schedule(interval_hours: int) -> None:
+def schedule(interval_hours: int, searches: list[str]) -> None:
     os.makedirs(Path(_project_dir()) / "logs", exist_ok=True)
     current = _read_crontab()
 
     # Remove any existing managed entry before adding the new one
     lines = [l for l in current.splitlines() if CRON_MARKER not in l]
-    lines.append(_cron_entry(interval_hours))
+    lines.append(_cron_entry(interval_hours, searches))
     _write_crontab("\n".join(lines) + "\n")
     print(f"Scheduled: scraper will run every {interval_hours} hours.")
+    print(f"Searches: {', '.join(searches)}")
     print(f"Logs → {_project_dir()}/logs/scraper.log")
     print("To turn off: python scraper.py --unschedule")
 
@@ -991,7 +1009,23 @@ def unschedule() -> None:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Eluta.ca Job Scraper")
+    parser = argparse.ArgumentParser(
+        description="Eluta.ca Job Scraper",
+        epilog=(
+            'Examples:\n'
+            '  python scraper.py "software engineer"\n'
+            '  python scraper.py "human resources" "labour relations"\n'
+            '  python scraper.py -p 50 "human resources" "labour relations"\n'
+            '  python scraper.py -H 10 "project manager"\n'
+            '  python scraper.py -d 2 "human resources" "labour relations" "project manager"\n'
+            '  python scraper.py --ai false "software engineer"'
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "searches", nargs="*",
+        help='One or more search terms to scrape, e.g. "human resources" "labour relations"'
+    )
     parser.add_argument(
         "--ingest-feedback", metavar="FILE",
         help="Ingest a completed review.xlsx or disputed filtered.json into feedback.json"
@@ -1014,10 +1048,31 @@ def main() -> None:
         "--no-headless", action="store_true",
         help="Show browser window for manual CAPTCHA solving (headless=False)"
     )
+    parser.add_argument(
+        "--ai", type=lambda x: x.lower() != "false", default=True, metavar="true|false",
+        help="Enable or disable Claude AI filtering (default: true)"
+    )
+
+    depth_group = parser.add_mutually_exclusive_group()
+    depth_group.add_argument(
+        "-p", type=int, metavar="N", dest="pages",
+        help="Scrape exactly N pages per search term (overrides config)"
+    )
+    depth_group.add_argument(
+        "-H", type=int, metavar="N", dest="hours",
+        help="Stop when postings are older than N hours (overrides config)"
+    )
+    depth_group.add_argument(
+        "-d", type=int, metavar="N", dest="days",
+        help="Stop when postings are older than N days (overrides config)"
+    )
+
     args = parser.parse_args()
 
     if args.schedule:
-        schedule(args.interval)
+        if not args.searches:
+            parser.error('--schedule requires at least one search term.\n\nExample:\n  python scraper.py --schedule "human resources" "labour relations"')
+        schedule(args.interval, args.searches)
         return
 
     if args.unschedule:
@@ -1037,37 +1092,84 @@ def main() -> None:
         print(f"Done. {new_decisions} new decision(s) added to {args.feedback}.")
         return
 
-    # Scrape mode
+    # Scrape mode — require at least one search term
+    if not args.searches:
+        parser.error(
+            'at least one search term is required.\n\n'
+            'Examples:\n'
+            '  python scraper.py "software engineer"\n'
+            '  python scraper.py -p 50 "human resources" "labour relations"\n'
+            '  python scraper.py -H 10 "project manager"\n'
+            '  python scraper.py -d 2 "human resources" "labour relations" "project manager"\n'
+            '  python scraper.py --ai false "software engineer"'
+        )
+
+    # Apply AI flag override
+    config["scraper"]["ai_filter"] = args.ai
+
+    # Resolve depth override
+    cutoff_days_override: float | None = None
+    if args.hours is not None:
+        cutoff_days_override = args.hours / 24
+    elif args.days is not None:
+        cutoff_days_override = float(args.days)
+
     os.makedirs("output", exist_ok=True)
     today = date.today()
-
-    print(f"Starting Eluta scrape: '{config['sites']['eluta']['query']}'")
-    print(f"Max pages: {config['sites']['eluta']['max_pages']}")
-    print()
-    start_time = time.time()
-
-    seen_ids = load_seen_ids()
-    try:
-        accepted, review, filtered, dup_count, pages_scraped, network_error = run_scrape(config, feedback, seen_ids, headless=not args.no_headless)
-    except anthropic.AuthenticationError:
-        sys.exit("Error: ANTHROPIC_API_KEY is missing or invalid. Set it with: export ANTHROPIC_API_KEY=...")
-    save_seen_ids(seen_ids)
-
     accepted_path = f"output/eluta_{today}.xlsx"
     review_path = f"output/review_{today}.xlsx"
     filtered_path = f"output/filtered_{today}.json"
 
-    write_accepted_xlsx(accepted, accepted_path)
-    if review:
-        write_review_xlsx(review, review_path)
-    if filtered:
-        write_filtered_json(filtered, filtered_path)
+    seen_ids = load_seen_ids()
+    all_accepted: list = []
+    all_review: list = []
+    all_filtered: list = []
+    total_dups = 0
+    total_pages = 0
+    start_time = time.time()
 
-    if network_error:
-        print(f"\nWarning: run ended early due to network error: {network_error}")
-        print("Partial results saved.")
+    for search in args.searches:
+        print(f"\nSearching: '{search}'")
+        if args.pages is not None:
+            print(f"  Depth: {args.pages} pages")
+        elif args.hours is not None:
+            print(f"  Depth: posts within last {args.hours} hours")
+        elif args.days is not None:
+            print(f"  Depth: posts within last {args.days} days")
+        print()
 
-    print_summary(accepted, review, filtered, dup_count, pages_scraped, accepted_path, time.time() - start_time)
+        try:
+            accepted, review, filtered, dup_count, pages_scraped, network_error = run_scrape(
+                config, feedback, seen_ids,
+                headless=not args.no_headless,
+                query=search,
+                max_pages_override=args.pages,
+                cutoff_days_override=cutoff_days_override,
+            )
+        except anthropic.AuthenticationError:
+            sys.exit("Error: ANTHROPIC_API_KEY is missing or invalid. Set it with: export ANTHROPIC_API_KEY=...")
+
+        sheet_name = search[:31]
+        write_accepted_xlsx(accepted, accepted_path, sheet_name)
+        if review:
+            write_review_xlsx(review, review_path, sheet_name)
+        if filtered:
+            write_filtered_json(filtered, filtered_path)
+
+        if network_error:
+            print(f"\nWarning: '{search}' run ended early due to network error: {network_error}")
+            print("Partial results saved.")
+
+        print(f"  '{search}': {len(accepted)} accepted, {len(review)} review, {dup_count} dupes — {pages_scraped} pages")
+
+        all_accepted.extend(accepted)
+        all_review.extend(review)
+        all_filtered.extend(filtered)
+        total_dups += dup_count
+        total_pages += pages_scraped
+
+    save_seen_ids(seen_ids)
+    print_summary(all_accepted, all_review, all_filtered, total_dups, total_pages, accepted_path, time.time() - start_time)
 
 
 if __name__ == "__main__":
