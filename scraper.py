@@ -377,10 +377,9 @@ def _polite_delay(config: dict, headless: bool = True) -> None:
     time.sleep(delay)
 
 
-def _has_captcha(html: str) -> bool:
-    """Check if page is showing reCAPTCHA or sandbox redirect."""
-    html_lower = html.lower()
-    return "recaptcha" in html_lower or "sandbox" in html_lower or "challenge" in html_lower
+def _has_captcha(url: str) -> bool:
+    """Check if page is showing CAPTCHA/sandbox redirect."""
+    return "/sandbox" in url
 
 
 def _alert_captcha() -> None:
@@ -396,7 +395,7 @@ def _alert_captcha() -> None:
             "JobScraper",
             "CAPTCHA detected — please solve in browser",
             "-u", "critical",
-            "-t", "0"
+            "-t", "5000"
         ], timeout=2)
     except Exception:
         pass
@@ -443,14 +442,16 @@ def fetch_results_page(page_num: int, query: str, config: dict, pw_page, headles
     pw_page.goto(url, wait_until="domcontentloaded", timeout=PLAYWRIGHT_TIMEOUT_MS)
     html = pw_page.content()
 
-    if _has_captcha(html):
+    if _has_captcha(pw_page.url):
         print("\n⚠️  CAPTCHA detected! Waiting for manual solve...")
         _alert_captcha()
-        # Wait for user to solve CAPTCHA manually
-        time.sleep(5)
-        # Reload page to check if CAPTCHA was solved
-        pw_page.reload(wait_until="domcontentloaded")
-        html = pw_page.content()
+        # Wait up to 5 minutes for browser to navigate away from sandbox
+        start_time = time.time()
+        while time.time() - start_time < 300:
+            time.sleep(1)
+            if "/sandbox" not in pw_page.url:
+                html = pw_page.content()
+                break  # CAPTCHA solved, browser navigated to real page
 
     soup = BeautifulSoup(html, "html.parser")
 
@@ -495,14 +496,16 @@ def fetch_full_jd(slug: str, config: dict, pw_page, headless: bool = True) -> tu
     pw_page.goto(eluta_url, wait_until="domcontentloaded", timeout=PLAYWRIGHT_TIMEOUT_MS)
     html = pw_page.content()
 
-    if _has_captcha(html):
+    if _has_captcha(pw_page.url):
         print("\n⚠️  CAPTCHA detected! Waiting for manual solve...")
         _alert_captcha()
-        # Wait for user to solve CAPTCHA manually
-        time.sleep(5)
-        # Reload page to check if CAPTCHA was solved
-        pw_page.reload(wait_until="domcontentloaded")
-        html = pw_page.content()
+        # Wait up to 5 minutes for browser to navigate away from sandbox
+        start_time = time.time()
+        while time.time() - start_time < 300:
+            time.sleep(1)
+            if "/sandbox" not in pw_page.url:
+                html = pw_page.content()
+                break  # CAPTCHA solved, browser navigated to real page
 
     soup = BeautifulSoup(html, "html.parser")
 
@@ -564,7 +567,18 @@ def classify_job(job: dict, jd_text: str, feedback: dict, config: dict, is_ambig
                 "yoe_required": yoe,
             }
 
-    # Step 3: Claude
+    # Step 3: Claude (if enabled)
+    if not config["scraper"].get("ai_filter", True):
+        yoe = extract_yoe(jd_text)
+        return {
+            **job,
+            "category": "general_swe",
+            "confidence": None,
+            "flagged_for_review": True,
+            "relevant": True,
+            "yoe_required": yoe,
+        }
+
     claude_result = claude_classify(title, jd_text, feedback, config)
     yoe = extract_yoe(jd_text)  # compute once; fall back to Claude's yoe if regex found nothing
     return {

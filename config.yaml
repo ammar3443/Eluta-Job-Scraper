@@ -86,3 +86,4 @@ scraper:
   delay_max: 20
   respect_robots_txt: true
   cutoff_days: 3  # stop scraping jobs older than this many days (set to 0 to disable)
+  ai_filter: true  # set to false to skip Claude classification and flag unmatched jobs for review
